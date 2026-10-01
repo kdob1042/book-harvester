@@ -11,7 +11,7 @@ export function safeExternalUrl(value:string,hosts:string[]){
 export function publicIp(ip:string){
  if(isIP(ip)===4){const [a,b,c]=ip.split('.').map(Number);return a>0&&a!==10&&a!==127&&a<224&&!(a===169&&b===254)&&!(a===172&&b>=16&&b<=31)&&!(a===192&&b===168)&&!(a===100&&b>=64&&b<=127)&&!(a===192&&(b===0||b===2))&&!(a===198&&(b===18||b===19||b===51&&c===100))&&!(a===203&&b===0&&c===113);}
  // Only global IPv6 unicast, excluding documentation/translation/embedded IPv4 ranges.
- return isIP(ip)===6&&/^[23][0-9a-f]{0,3}:/i.test(ip)&&!/^2001:(?:db8|0(?:0{0,3})?|10|20):/i.test(ip)&&!/^2002:/i.test(ip);
+ if(isIP(ip)!==6)return false;ip=new URL(`https://[${ip}]/`).hostname.slice(1,-1);return /^[23][0-9a-f]{3}:/i.test(ip)&&!/^2001:(?:db8|0(?:0{0,3})?|10|20):/i.test(ip)&&!/^2002:/i.test(ip);
 }
 async function responseBytes(response:Response,max:number){return boundedBody(new Request('http://localhost',{method:'POST',body:response.body,duplex:'half'} as RequestInit),max);}
 async function validateDns(host:string,fetcher:typeof fetch){
