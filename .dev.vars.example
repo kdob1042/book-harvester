@@ -1,0 +1,3 @@
+# コピーして .dev.vars にする。実際の秘密はGitに保存しない。
+APP_PASSWORD=""
+OPENAI_API_KEY=""

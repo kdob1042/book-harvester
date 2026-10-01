@@ -1,0 +1,26 @@
+{
+  "name": "book-harvester",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "dev": "wrangler dev --local --port 8787",
+    "check": "tsc --noEmit",
+    "test": "node --test test/*.test.js",
+    "build": "wrangler deploy --dry-run --outdir dist --env=\"\"",
+    "types": "wrangler types --include-runtime false --strict-vars false",
+    "migrate": "wrangler d1 migrations apply DB --local",
+    "deploy": "node scripts/deploy.mjs",
+    "test:browser": "node scripts/browser-smoke.mjs"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261001.1",
+    "@playwright/test": "^1.63.0",
+    "@types/node": "^24.19.0",
+    "typescript": "^7.0.2",
+    "wrangler": "^4.145.0"
+  }
+}

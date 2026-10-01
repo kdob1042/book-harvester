@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": [
+      "ES2023"
+    ],
+    "strict": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "allowJs": true,
+    "checkJs": false,
+    "skipLibCheck": true,
+    "types": [
+      "@cloudflare/workers-types",
+      "node",
+      "./worker-configuration.d.ts"
+    ]
+  },
+  "include": [
+    "src/**/*.ts",
+    "src/harvest-contract.js",
+    "worker-configuration.d.ts"
+  ]
+}

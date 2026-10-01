@@ -1,0 +1,111 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "book-harvester-dev",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "workers_dev": true,
+  "preview_urls": false,
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": true
+  },
+  "vars": {
+    "APP_ORIGIN": "http://localhost:8787",
+    "OPENAI_MODEL": "gpt-4.1-mini",
+    "OPENAI_TRANSCRIBE_MODEL": "gpt-4o-mini-transcribe",
+    "AI_DAILY_CALL_LIMIT": "60",
+    "AI_MAX_OUTPUT_TOKENS": "4000"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "book-harvester-dev",
+      "database_id": "00000000-0000-0000-0000-000000000001",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "ORIGINALS",
+      "bucket_name": "book-harvester-dev-originals"
+    }
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "HARVEST_QUEUE",
+        "queue": "book-harvester-dev-harvest"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "book-harvester-dev-harvest",
+        "max_batch_size": 1,
+        "max_batch_timeout": 1,
+        "max_concurrency": 1,
+        "max_retries": 3
+      }
+    ]
+  },
+  "triggers": {
+    "crons": [
+      "* * * * *"
+    ]
+  },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 0.1
+  },
+  "env": {
+    "production": {
+      "name": "book-harvester",
+      "vars": {
+        "APP_ORIGIN": "https://book-harvester.invalid",
+        "OPENAI_MODEL": "gpt-4.1-mini",
+        "OPENAI_TRANSCRIBE_MODEL": "gpt-4o-mini-transcribe",
+        "AI_DAILY_CALL_LIMIT": "60",
+        "AI_MAX_OUTPUT_TOKENS": "4000"
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "book-harvester",
+          "database_id": "00000000-0000-0000-0000-000000000002",
+          "migrations_dir": "migrations"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "ORIGINALS",
+          "bucket_name": "book-harvester-originals"
+        }
+      ],
+      "queues": {
+        "producers": [
+          {
+            "binding": "HARVEST_QUEUE",
+            "queue": "book-harvester-harvest"
+          }
+        ],
+        "consumers": [
+          {
+            "queue": "book-harvester-harvest",
+            "max_batch_size": 1,
+            "max_batch_timeout": 1,
+            "max_concurrency": 1,
+            "max_retries": 3
+          }
+        ]
+      },
+      "triggers": {
+        "crons": [
+          "* * * * *"
+        ]
+      }
+    }
+  }
+}
