@@ -66,6 +66,29 @@ test('failed rebuild preserves current generation; successful resend is idempote
  const job=f.db.prepare('SELECT id FROM graph_jobs WHERE capture_id=?').get(second);const count=f.db.prepare('SELECT count(*) n FROM graph_generations').get().n;await processGraphJob(f.env,job.id,semanticMock);assert.equal(f.db.prepare('SELECT count(*) n FROM graph_generations').get().n,count);assert.equal(f.db.prepare('SELECT count(*) n FROM current_graph_nodes').get().n,6);
 });
 
+test('hiding a grounded connection survives paraphrasing; changed conditions and evidence remain visible',async t=>{
+ const {f,second}=await prepare(t);const before=await detail(f,second),key=before.graph.discoveries[0].item_key;
+ assert.match(key,/^connection:[a-f0-9]+$/);
+ assert.equal((await f.request(`/api/captures/${second}/hide`,json('POST',{version:1,item_key:'connection:invented'}))).status,400);
+ assert.equal((await f.request(`/api/captures/${second}/hide`,json('POST',{version:1,item_key:key}))).status,200);
+ const regenerate=async mutate=>{
+  await f.request('/api/graph/rebuild',json('POST',{capture_ids:[second]}));
+  await f.drain(async(url,opts)=>{
+   const response=await semanticMock(url,opts),body=JSON.parse(opts.body);
+   if(body.text.format.name!=='knowledge_graph_v1')return response;
+   const data=await response.json(),out=JSON.parse(data.output[0].content[0].text);
+   out.discoveries[0].text='投資負担の軽減と設備供給側の優位性は同時に成立する可能性がある。';
+   const edge=out.relations.find(r=>r.id===out.discoveries[0].relation_id);edge.id='renamed';out.discoveries[0].relation_id=edge.id;
+   edge.evidence.reverse();mutate(edge);return graphResponse({},out);
+  });return (await detail(f,second)).graph.discoveries;
+ };
+ assert.equal((await regenerate(()=>{})).length,0);
+ const changed=await regenerate(r=>r.conditions.push('需要が持続する場合'));
+ assert.equal(changed.length,1);assert.notEqual(changed[0].item_key,key);
+ assert.equal((await regenerate(r=>r.evidence[0].quote=r.evidence[0].quote.slice(0,-1))).length,1);
+ assert.equal((await regenerate(()=>{})).length,0);
+});
+
 test('graph validation rejects invented edges, unrelated evidence, unsupported causality and disconnected mechanisms',()=>{
  const h=material(a,'本A'),input={current:{harvest:h},candidates:{nodes:[],views:[]}},out=graphResult(input);assert.doesNotThrow(()=>validateGraph(out,h,input.candidates));
  const clone=()=>structuredClone(out);

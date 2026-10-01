@@ -243,9 +243,10 @@ async function route(request:Request,env:Env,ctx:ExecutionContext){
   if(action==='hide'&&method==='POST'){
    const input=await jsonBody(request),c=await getCapture(env,captureId);if(!c||c.version!==version(input.version))fail(409,'資料が更新されています。');
    const graph=await readGraph(env,c.id,c.version),key=text(input.item_key,5000);
-   const allowed=[...graph.discoveries.map(d=>`discovery:${d.text}`),...(graph.proposal?[`proposal:${graph.proposal.view_id}:${graph.proposal.from_text}:${graph.proposal.to_text}`]:[])];
-   if(!allowed.includes(key))fail(400,'表示中の案を選んでください。');
-   await stmt(env,"INSERT OR REPLACE INTO graph_overrides(capture_id,item_key,action,created_at) VALUES(?,?,'hidden',?)",c.id,key,now()).run();return json({ok:true});
+   const discovery=graph.discoveries.find(d=>d.item_key===key||`discovery:${d.text}`===key);
+   const allowed=[...graph.discoveries.map(d=>d.item_key),...(graph.proposal?[`proposal:${graph.proposal.view_id}:${graph.proposal.from_text}:${graph.proposal.to_text}`]:[])];
+   if(!discovery&&!allowed.includes(key))fail(400,'表示中の案を選んでください。');
+   await stmt(env,"INSERT OR REPLACE INTO graph_overrides(capture_id,item_key,action,created_at) SELECT ?,?,'hidden',? WHERE EXISTS(SELECT 1 FROM captures WHERE id=? AND version=?)",c.id,discovery?.item_key||key,now(),c.id,c.version).run();return json({ok:true});
   }
   if(action==='ask'&&method==='POST'){
    const input=await jsonBody(request),c=await getCapture(env,captureId);

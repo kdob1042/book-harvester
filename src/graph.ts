@@ -15,6 +15,14 @@ type Node={id:string;kind:string;capture_id:string;version:number;text:string;pa
 type Candidates={nodes:Node[];views:View[]};
 type GraphJob={id:string;capture_id:string;version:number;attempts:number;state:string;error_code:string|null};
 const nodeId=(captureId:string,v:number,local:string)=>`${captureId}:${v}:${local}`;
+// A hidden connection follows its grounded edge across regenerated wording/IDs.
+// Changed source versions, direction, conditions, interpretation or evidence stay reviewable.
+async function discoveryKey(relation:Relation){
+ const normalize=(s:string)=>s.normalize('NFKC').trim().replace(/\s+/g,' ');
+ const conditions=[...new Set(relation.conditions.map(normalize))].sort();
+ const evidence=relation.evidence.map(e=>[e.claim_id,e.quote===null?null:normalize(e.quote)]).sort((a,b)=>JSON.stringify(a).localeCompare(JSON.stringify(b)));
+ return `connection:${await digest(JSON.stringify([relation.from_id,relation.to_id,relation.type,relation.interpretation,conditions,evidence]))}`;
+}
 export function graphJobStatement(env:Env,captureId:string,v:number,guard='1',values:(string|number|null)[]=[]){
  return stmt(env,`INSERT OR IGNORE INTO graph_jobs(id,capture_id,version,available_at,created_at) SELECT ?,?,?,?,? WHERE ${guard}`,id(),captureId,v,now(),now(),...values);
 }
@@ -128,7 +136,10 @@ export async function readGraph(env:Env,captureId:string,v:number){
  const remoteIds=[...new Set(valid.flatMap(r=>{const p=JSON.parse(r.payload) as Relation;return p.evidence.map(e=>e.claim_id);} ))];
  const evidence=remoteIds.length?await rows<{id:string;capture_id:string;version:number;text:string;payload:string;source_title:string|null;page:string|null}>(env,`SELECT n.*,s.title AS source_title,c.page FROM current_graph_nodes n JOIN captures c ON c.id=n.capture_id LEFT JOIN sources s ON s.id=c.source_id WHERE n.id IN(${remoteIds.map(()=>'?').join(',')})`,...remoteIds):[];
  const relations=new Map(valid.map(r=>{const p=JSON.parse(r.payload) as Relation;return [p.id,{...p,evidence:p.evidence.map(e=>({...e,...evidence.find(n=>n.id===e.claim_id),payload:undefined}))}];}));
- const discoveries=result.discoveries.filter(d=>!hidden.has(`discovery:${d.text}`)&&relations.has(d.relation_id)).map(d=>({...d,relation:relations.get(d.relation_id)}));
+ const discoveries=(await Promise.all(result.discoveries.filter(d=>relations.has(d.relation_id)).map(async d=>{
+  const relation=relations.get(d.relation_id)!,item_key=await discoveryKey(relation);
+  return {...d,item_key,relation};
+ }))).filter(d=>!hidden.has(d.item_key)&&!hidden.has(`discovery:${d.text}`));
  const proposal=await stmt(env,`SELECT p.*,v.body,v.version AS current_version FROM view_proposals p JOIN views v ON v.id=p.view_id WHERE p.generation_id=? AND p.status='pending'`,g.id).first<{id:string;view_id:string;base_version:number;current_version:number;body:string;from_text:string;to_text:string;reason:string}>();
  const show=proposal&&!overrides.some(x=>x.item_key===`proposal:${proposal.view_id}:${proposal.from_text}:${proposal.to_text}`)?{...proposal,stale:proposal.current_version!==proposal.base_version,preview:proposal.body.replace(proposal.from_text,proposal.to_text)}:null;
  return {job:show?.stale&&job?.state==='completed'?{...job,state:'pending'}:job,generation_id:g.id,discoveries,mechanisms:result.mechanisms,proposal:show};

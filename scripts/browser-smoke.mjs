@@ -71,10 +71,13 @@ try{
  await page.getByText('両側の根拠と違いを読む',{exact:true}).click();await page.getByText('変更する箇所と理由を読む',{exact:true}).click();
  await expect(page.getByRole('link',{name:'本A · p.1の原資料'})).toBeVisible();await expect(page.getByRole('link',{name:'本B · p.1の原資料'})).toBeVisible();
  await page.setViewportSize({width:1280,height:900});await page.screenshot({path:'test-results/desktop-cross-book.png',fullPage:true});
+ await page.getByRole('button',{name:'この接続を表示しない',exact:true}).click();
+ await expect(page.getByText('過去との接続 · AIの比較',{exact:true})).not.toBeVisible();
+ await expect(page.getByRole('button',{name:'この見方に更新',exact:true})).toBeVisible();
  await page.getByRole('button',{name:'この見方に更新',exact:true}).click();await expect(page.getByText('自分の見方 · 第2版',{exact:true})).toBeVisible();await expect(page.locator('h1')).toContainText('景気の見方は変えない。');
  await page.getByText('見方を編集・履歴を読む',{exact:true}).click();await expect(page.locator('.history')).toHaveCount(2);
  await page.getByRole('button',{name:'← 本から拾ったもの'}).click();await page.getByRole('button',{name:new RegExp(a)}).click();await page.getByText('訂正・補足など',{exact:true}).click();await page.getByRole('button',{name:'この記録を削除',exact:true}).click();await page.getByRole('button',{name:'削除する',exact:true}).click();
  const viewRow=page.locator('.view-row').filter({hasText:'利用者の参入しやすさ'});await viewRow.click();await expect(page.getByText('根拠の資料が訂正・削除されています。',{exact:false})).toBeVisible();await expect(page.locator('h1')).toContainText('景気の見方は変えない。');
  if(browserErrors.length)throw new Error(browserErrors.join('\n'));
- console.log('Browser smoke passed: mobile/desktop, 1 primary action, auto-save, revisit, adoption/history, microphone fallback, cross-book evidence, single-action View update, source deletion preserves View, no horizontal overflow.');
+ console.log('Browser smoke passed: mobile/desktop, 1 primary action, auto-save, revisit, adoption/history, microphone fallback, cross-book evidence/hide, single-action View update, source deletion preserves View, no horizontal overflow.');
 }finally{await browser.close();await new Promise(resolve=>server.close(resolve));await f.close();}
