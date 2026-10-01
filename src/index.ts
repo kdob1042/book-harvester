@@ -173,7 +173,7 @@ async function deleteCapture(request:Request,env:Env,captureId:string){
   ...(receipt?[receipt]:[]),
  ]);
  if(!result[2].meta.changes)fail(409,'記録が更新されています。開き直してください。');
- await env.DB.batch([stmt(env,"UPDATE external_source_index SET deleted=1 WHERE capture_id IS NULL"),stmt(env,"UPDATE research_materials SET state='deleted',body=NULL WHERE capture_id IS NULL AND state='saved'"),stmt(env,"UPDATE research_materials SET state='deleted',body=NULL WHERE state='duplicate' AND content_hash IN(SELECT content_hash FROM research_materials WHERE state='deleted')")]);
+ await env.DB.batch([stmt(env,"UPDATE external_source_index SET deleted=1 WHERE capture_id IS NULL"),stmt(env,"UPDATE research_materials SET state='deleted',body=NULL WHERE capture_id IS NULL AND state='saved'"),stmt(env,"UPDATE research_materials SET state='deleted',body=NULL WHERE state='duplicate' AND content_hash IN(SELECT content_hash FROM research_materials WHERE state='deleted')"),stmt(env,"UPDATE research_runs SET result_json=NULL WHERE id IN(SELECT run_id FROM research_materials WHERE state='deleted')"),stmt(env,"UPDATE research_runs SET question='元の記録は削除済み',result_json=NULL,state='superseded',lease_token=NULL WHERE capture_id IS NULL AND capture_version IS NOT NULL")]);
  // Deletion intent is durable even if R2 temporarily fails. Private download routes already stop resolving.
  try{await cleanup(env);}catch{return json({ok:true,originals_pending:true});}return json({ok:true});
 }
