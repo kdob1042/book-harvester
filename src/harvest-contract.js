@@ -23,13 +23,14 @@ export function validateAnswer(value, sourceText) {
   return value;
 }
 
-function validate(schema, value, depth = 0) {
+export function validate(schema, value, depth = 0) {
   if (depth > 15) throw new Error('invalid_output');
   if (schema.anyOf) {
     if (schema.anyOf.some(s => { try { validate(s, value, depth + 1); return true; } catch { return false; } })) return;
     throw new Error('invalid_output');
   }
   const type = value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value;
+  if (schema.type === 'integer' && Number.isInteger(value)) return;
   if (!(Array.isArray(schema.type) ? schema.type : [schema.type]).includes(type)) throw new Error('invalid_output');
   if (schema.enum && !schema.enum.includes(value)) throw new Error('invalid_output');
   if (type === 'object') {

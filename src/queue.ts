@@ -1,5 +1,6 @@
 import {stmt,rows,getCapture,now,id,type Job,type QueueBody} from './core.ts';
 import {transcribe,harvest,AiError} from './ai.ts';
+import {graphJobStatement,dispatchGraph,processGraphJob} from './graph.ts';
 
 export async function dispatch(env:Env) {
  const time=now();
@@ -14,6 +15,7 @@ export async function dispatch(env:Env) {
   try{await env.HARVEST_QUEUE.send({job_id:job.id},{contentType:'json'});}
   catch{await stmt(env,"UPDATE jobs SET dispatched_at=NULL WHERE id=? AND state='pending'",job.id).run();}
  }
+ await dispatchGraph(env);
 }
 
 export async function processJob(env:Env,jobId:string,fetcher?:typeof fetch) {
@@ -47,9 +49,11 @@ export async function processJob(env:Env,jobId:string,fetcher?:typeof fetch) {
    statements.push(stmt(env,`INSERT OR REPLACE INTO settings(key,value) SELECT 'current_source',source_id FROM captures WHERE id=? AND source_locked=0 AND id=(SELECT id FROM captures ORDER BY created_at DESC,rowid DESC LIMIT 1) AND ${guard}`,capture.id,job.id,token));
   }
   statements.push(stmt(env,`UPDATE captures SET page=?,chapter=?,locator_certainty=? WHERE id=? AND source_locked=0 AND ${guard}`,source.page,source.chapter,source.certainty,capture.id,job.id,token));
+  statements.push(graphJobStatement(env,capture.id,job.version,guard,[job.id,token]));
   statements.push(stmt(env,`UPDATE jobs SET state=CASE WHEN version=(SELECT version FROM captures WHERE id=?) THEN 'completed' ELSE 'superseded' END,
    error_code=NULL,input_tokens=?,output_tokens=?,finished_at=?,lease_token=NULL WHERE id=? AND state='running' AND lease_token=?`,capture.id,output.usage.input_tokens||0,output.usage.output_tokens||0,now(),job.id,token));
   await env.DB.batch(statements);
+  await dispatchGraph(env);
  }catch(e){
   const safe=e instanceof AiError?e:new AiError('processing_failed'),blocked=['ai_not_configured','daily_limit'].includes(safe.code);
   const next=blocked?'blocked':safe.retryable&&job.attempts<3?'pending':'failed';
@@ -74,6 +78,7 @@ export async function consume(batch:MessageBatch<unknown>,env:Env){
   try{
    const body=message.body;
    if(body&&typeof body==='object'&&'job_id' in body&&typeof body.job_id==='string')await processJob(env,body.job_id);
+   if(body&&typeof body==='object'&&'graph_job_id' in body&&typeof body.graph_job_id==='string')await processGraphJob(env,body.graph_job_id);
    message.ack();
   }
   catch{message.retry({delaySeconds:60});}

@@ -4,6 +4,7 @@ import {loggedIn,login,logout} from './auth.ts';
 import {captureInput,requestKey,stageAsset,type Input} from './input.ts';
 import {dispatch,cleanup,consume} from './queue.ts';
 import {answer,AiError} from './ai.ts';
+import {readGraph,rebuildGraph} from './graph.ts';
 
 const json=(data:unknown,status=200,headers:HeadersInit={})=>Response.json(data,{status,headers});
 const has=(input:Record<string,unknown>,key:string)=>Object.hasOwn(input,key);
@@ -22,7 +23,9 @@ async function list(env:Env,search:string){
  FROM captures c LEFT JOIN sources s ON s.id=c.source_id LEFT JOIN jobs j ON j.capture_id=c.id AND j.version=c.version
  LEFT JOIN harvests h ON h.capture_id=c.id AND h.version=c.version
  WHERE ?='' OR c.original_text LIKE ? ESCAPE '\\' OR c.note LIKE ? ESCAPE '\\' OR h.result LIKE ? ESCAPE '\\' OR s.title LIKE ? ESCAPE '\\'
- ORDER BY c.created_at DESC,c.rowid DESC LIMIT 100`,search,escaped,escaped,escaped,escaped);
+ OR EXISTS(SELECT 1 FROM current_graph_nodes n WHERE n.capture_id=c.id AND (n.text LIKE ? ESCAPE '\\' OR n.payload LIKE ? ESCAPE '\\'))
+ OR EXISTS(SELECT 1 FROM current_graph_relations r WHERE r.capture_id=c.id AND r.payload LIKE ? ESCAPE '\\')
+ ORDER BY c.created_at DESC,c.rowid DESC LIMIT 100`,search,escaped,escaped,escaped,escaped,escaped,escaped,escaped);
  return data.map(({result,...c})=>({...c,harvest:result?JSON.parse(result) as Harvest:null}));
 }
 function assetStatement(env:Env,captureId:string,objectKey:string,input:Input,key:string|null,mutation:string){
@@ -108,6 +111,38 @@ async function adopt(request:Request,env:Env,captureId:string){
  const saved=await stmt(env,'SELECT id FROM views WHERE draft_key=?',key).first<{id:string}>();
  if(!saved)fail(409,'解析結果が更新されています。開き直してください。');return json(saved,201);
 }
+async function adoptProposal(request:Request,env:Env,captureId:string){
+ const input=await jsonBody(request),proposalId=text(input.proposal_id,100),c=await getCapture(env,captureId);
+ if(!c||c.version!==version(input.version))fail(409,'資料が更新されています。開き直してください。');
+ const p=await stmt(env,`SELECT p.*,g.capture_id,g.version AS capture_version FROM view_proposals p JOIN graph_generations g ON g.id=p.generation_id WHERE p.id=? AND g.capture_id=?`,proposalId,captureId).first<{id:string;generation_id:string;view_id:string;base_version:number;from_text:string;to_text:string;reason:string;references_json:string;status:string}>();
+ if(!p)fail(404,'提案が見つかりません。');
+ if(p.status==='adopted')return json({id:p.view_id,duplicate:true});
+ const v=await stmt(env,'SELECT * FROM views WHERE id=?',p.view_id).first<View>();
+ if(!v||v.version!==p.base_version||v.body.split(p.from_text).length!==2){
+  await rebuildGraph(env,[captureId]);fail(409,'見方が更新されたため、現行版と自動で比較し直します。');
+ }
+ const body=v.body.replace(p.from_text,p.to_text),time=now();
+ const prior=await stmt(env,'SELECT references_json FROM view_revisions WHERE view_id=? AND version=?',v.id,v.version).first<{references_json:string}>();
+ const old=JSON.parse(prior?.references_json||'{}'),refs=JSON.parse(p.references_json);
+ const deps=new Map<string,number>();
+ for(const r of [...(old.dependencies||[]),...(old.capture_id?[{capture_id:old.capture_id,version:old.capture_version}]:[]),...refs.dependencies,{capture_id:c.id,version:c.version}])deps.set(r.capture_id,r.version);
+ refs.dependencies=[...deps].map(([capture_id,version])=>({capture_id,version}));refs.previous_view_revision={view_id:v.id,version:v.version};
+ const guard=`EXISTS(SELECT 1 FROM current_graph_generations WHERE id=?) AND EXISTS(SELECT 1 FROM view_proposals WHERE id=? AND status='pending')`;
+ const saved=await env.DB.batch([
+  stmt(env,`INSERT INTO view_revisions(view_id,version,body,reason,references_json,created_at) SELECT id,version+1,?,?,?,? FROM views WHERE id=? AND version=? AND ${guard}`,body,p.reason,JSON.stringify(refs),time,v.id,p.base_version,p.generation_id,p.id),
+  stmt(env,`UPDATE views SET body=?,version=version+1 WHERE id=? AND version=? AND ${guard} AND EXISTS(SELECT 1 FROM view_revisions WHERE view_id=? AND version=? AND references_json=?)`,body,v.id,p.base_version,p.generation_id,p.id,v.id,p.base_version+1,JSON.stringify(refs)),
+  stmt(env,`UPDATE view_proposals SET status='adopted' WHERE id=? AND EXISTS(SELECT 1 FROM views WHERE id=? AND version=?) AND EXISTS(SELECT 1 FROM view_revisions WHERE view_id=? AND version=? AND references_json=?)`,p.id,v.id,p.base_version+1,v.id,p.base_version+1,JSON.stringify(refs)),
+  stmt(env,`INSERT OR REPLACE INTO graph_overrides(capture_id,item_key,action,created_at) SELECT ?,?,'adopted',? WHERE EXISTS(SELECT 1 FROM view_proposals WHERE id=? AND status='adopted')`,c.id,`proposal:${p.view_id}:${p.from_text}:${p.to_text}`,time,p.id),
+ ]);
+ if(!saved[1].meta.changes)fail(409,'資料か見方が更新されました。開き直してください。');return json({id:v.id},201);
+}
+async function evidenceStatus(env:Env,reference:Record<string,unknown>){
+ const deps=Array.isArray(reference.dependencies)?reference.dependencies as {capture_id:string;version:number}[]:[];
+ if(typeof reference.capture_id==='string')deps.push({capture_id:reference.capture_id,version:Number(reference.capture_version)});
+ const issues=[];
+ for(const d of deps){const c=await stmt(env,'SELECT version FROM captures WHERE id=?',d.capture_id).first<{version:number}>();if(!c||c.version!==d.version)issues.push({capture_id:d.capture_id,state:c?'changed':'deleted'});}
+ return issues;
+}
 async function editView(request:Request,env:Env,viewId:string){
  const input=await jsonBody(request),v=await stmt(env,'SELECT * FROM views WHERE id=?',viewId).first<View>();if(!v)fail(404,'見方が見つかりません。');
  const base=version(input.version);if(v.version!==base)fail(409,'見方が更新されています。開き直してください。');
@@ -131,6 +166,7 @@ async function deleteCapture(request:Request,env:Env,captureId:string){
   stmt(env,'DELETE FROM captures WHERE id=? AND version=?',captureId,base),
   stmt(env,"DELETE FROM settings WHERE key='current_source' AND value IN (SELECT id FROM sources WHERE id NOT IN(SELECT source_id FROM captures WHERE source_id IS NOT NULL))"),
   stmt(env,'DELETE FROM sources WHERE id NOT IN(SELECT source_id FROM captures WHERE source_id IS NOT NULL)'),
+  stmt(env,'DELETE FROM concepts WHERE id NOT IN(SELECT concept_id FROM concept_mentions)'),
  ]);
  if(!result[1].meta.changes)fail(409,'記録が更新されています。開き直してください。');
  // Deletion intent is durable even if R2 temporarily fails. Private download routes already stop resolving.
@@ -143,7 +179,7 @@ function exportData(env:Env){
  const stream=new ReadableStream<Uint8Array>({async start(controller){
   try{
    controller.enqueue(encoder.encode(`{"format":"book-harvester/v1","exported_at":${JSON.stringify(new Date().toISOString())}`));
-   for(const table of ['sources','captures','capture_revisions','harvests','answers','views','view_revisions','asset_transcripts','assets']){
+   for(const table of ['sources','captures','capture_revisions','harvests','answers','views','view_revisions','asset_transcripts','assets','graph_jobs','graph_generations','graph_nodes','concepts','concept_mentions','graph_relations','graph_dependencies','view_proposals','graph_overrides']){
     controller.enqueue(encoder.encode(`,${JSON.stringify(table)}:[`));let offset=0,first=true;
     while(true){
      const records=await rows<Record<string,unknown>>(env,`SELECT * FROM ${table} ORDER BY rowid LIMIT 50 OFFSET ?`,offset);
@@ -153,8 +189,11 @@ function exportData(env:Env){
        const object=await env.ORIGINALS.get(String(record.object_key));if(!object)throw new Error('export_original_missing');
        record.base64=Buffer.from(await object.arrayBuffer()).toString('base64');delete record.object_key;delete record.request_key;delete record.request_hash;
       }
-      if(table==='harvests'||table==='answers')record.result=JSON.parse(String(record.result));
-      if(table==='view_revisions'){record.references=JSON.parse(String(record.references_json));delete record.references_json;}
+      if(['harvests','answers','graph_generations'].includes(table))record.result=JSON.parse(String(record.result));
+      if(table==='graph_generations')record.input_snapshot=JSON.parse(String(record.input_snapshot));
+      if(table==='graph_nodes'||table==='graph_relations')record.payload=JSON.parse(String(record.payload));
+      if(table==='graph_jobs'){delete record.lease_token;}
+      if(table==='view_revisions'||table==='view_proposals'){record.references=JSON.parse(String(record.references_json));delete record.references_json;}
       controller.enqueue(encoder.encode(`${first?'':','}${JSON.stringify(record)}`));first=false;
      }
      if(records.length<50)break;offset+=50;
@@ -190,14 +229,24 @@ async function route(request:Request,env:Env,ctx:ExecutionContext){
  if(path==='/api/captures'&&method==='POST'){
   const saved=await saveCapture(request,env);ctx.waitUntil(dispatch(env));return saved;
  }
- const match=/^\/api\/captures\/([a-f0-9-]{36})(?:\/(assets|retry|adopt|ask))?$/.exec(path);
+ const match=/^\/api\/captures\/([a-f0-9-]{36})(?:\/(assets|retry|adopt|ask|proposal|hide))?$/.exec(path);
  if(match){
   const [,captureId,action]=match;
-  if(!action&&method==='GET'){const c=await getCapture(env,captureId);if(!c)fail(404,'記録が見つかりません。');return json(c);}
+  if(!action&&method==='GET'){const c=await getCapture(env,captureId);if(!c)fail(404,'記録が見つかりません。');return json({...c,graph:await readGraph(env,c.id,c.version)});}
   if(!action&&method==='PATCH'){const saved=await editCapture(request,env,captureId);ctx.waitUntil(dispatch(env));return saved;}
   if(!action&&method==='DELETE')return deleteCapture(request,env,captureId);
   if(action==='assets'&&method==='POST'){const saved=await supplement(request,env,captureId);ctx.waitUntil(dispatch(env));return saved;}
   if(action==='adopt'&&method==='POST')return adopt(request,env,captureId);
+  if(action==='proposal'&&method==='POST'){
+   try{return await adoptProposal(request,env,captureId);}finally{ctx.waitUntil(dispatch(env));}
+  }
+  if(action==='hide'&&method==='POST'){
+   const input=await jsonBody(request),c=await getCapture(env,captureId);if(!c||c.version!==version(input.version))fail(409,'資料が更新されています。');
+   const graph=await readGraph(env,c.id,c.version),key=text(input.item_key,5000);
+   const allowed=[...graph.discoveries.map(d=>`discovery:${d.text}`),...(graph.proposal?[`proposal:${graph.proposal.view_id}:${graph.proposal.from_text}:${graph.proposal.to_text}`]:[])];
+   if(!allowed.includes(key))fail(400,'表示中の案を選んでください。');
+   await stmt(env,"INSERT OR REPLACE INTO graph_overrides(capture_id,item_key,action,created_at) VALUES(?,?,'hidden',?)",c.id,key,now()).run();return json({ok:true});
+  }
   if(action==='ask'&&method==='POST'){
    const input=await jsonBody(request),c=await getCapture(env,captureId);
    if(!c?.harvest)fail(409,'読み取りが完了した記録から質問してください。');
@@ -226,9 +275,14 @@ async function route(request:Request,env:Env,ctx:ExecutionContext){
   if(method==='GET'){
    const v=await stmt(env,'SELECT * FROM views WHERE id=?',viewMatch[1]).first<View>();if(!v)fail(404,'見方が見つかりません。');
    const revisions=await rows<Record<string,unknown>>(env,'SELECT * FROM view_revisions WHERE view_id=? ORDER BY version DESC',v.id);
-   return json({...v,revisions:revisions.map(r=>({...r,references:JSON.parse(String(r.references_json)),references_json:undefined}))});
+   const references=JSON.parse(String(revisions[0]?.references_json||'{}'));
+   return json({...v,evidence_issues:await evidenceStatus(env,references),revisions:revisions.map(r=>({...r,references:JSON.parse(String(r.references_json)),references_json:undefined}))});
   }
-  if(method==='PATCH')return editView(request,env,viewMatch[1]);
+  if(method==='PATCH'){const saved=await editView(request,env,viewMatch[1]);ctx.waitUntil(dispatch(env));return saved;}
+ }
+ if(path==='/api/graph/rebuild'&&method==='POST'){
+  const input=await jsonBody(request);if(!Array.isArray(input.capture_ids)||input.capture_ids.length<1||input.capture_ids.length>20||input.capture_ids.some(x=>typeof x!=='string'||!/^[-a-f0-9]{36}$/.test(x)))fail(400,'再構成する記録IDを1〜20件指定してください。');
+  await rebuildGraph(env,input.capture_ids as string[]);ctx.waitUntil(dispatch(env));return json({ok:true},202);
  }
  if(path==='/api/export'&&method==='GET')return exportData(env);
  fail(404,'この操作は見つかりません。');

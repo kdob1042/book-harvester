@@ -203,6 +203,13 @@ async function saveUpload(file, text, target, reuse = null) {
   }
 }
 
+function graphMarkup(graph){
+ if(!graph)return '';
+ return `${graph.discoveries.length?`<section class="detail-section"><h2>過去との接続 · AIの比較</h2>${graph.discoveries.map(d=>`<div class="knowledge-item"><p>${esc(d.text)}</p><details class="fold"><summary>両側の根拠と違いを読む</summary><p>${esc(d.common_structure)}</p><p class="subtle">相違：${esc(d.important_difference)}</p><p class="subtle">条件：${d.relation.conditions.map(esc).join('、')||'未確定'}</p>${d.relation.evidence.map(e=>`<blockquote>${esc(e.quote||e.text)}<br><a href="#" data-evidence="${esc(e.capture_id)}">${esc(e.source_title||'出典未確認')}${e.page?` · p.${esc(e.page)}`:''}の原資料</a></blockquote>`).join('')}<button class="quiet" data-hide="${esc(`discovery:${d.text}`)}">この発見を表示しない</button></details></div>`).join('')}</section>`:''}
+ ${graph.mechanisms.length?`<section class="detail-section"><h2>説明のつながり</h2>${graph.mechanisms.map(m=>`<p>${esc(m.text)}</p><p class="subtle">条件：${m.conditions.map(esc).join('、')}${m.time_lag?` ／ 時間差：${esc(m.time_lag)}`:''}</p>`).join('')}</section>`:''}
+ ${['pending','running','blocked'].includes(graph.job?.state)?'<p class="subtle">知見は保存済みです。過去との接続を整理しています。</p>':graph.job?.state==='failed'?'<p class="subtle">今回の知見は保存済みです。過去との接続を整理できませんでした。</p>':''}`;
+}
+
 async function openCapture(captureId) {
   currentCapture = await api(`/api/captures/${captureId}`); currentView = null;
   renderCapture();
@@ -212,15 +219,17 @@ function renderCapture() {
   const source = `${c.source_certainty === 'inferred' ? '推定 ' : ''}${esc(c.source_title || '出典未確認')}`;
   const sourceLocator = c.page ? ` · ${c.locator_certainty === 'inferred' ? '推定 ' : ''}p.${esc(c.page)}` : '';
   const adopted = c.views.find(v => v.draft_key === `${c.id}:${c.version}`);
+  const graph=c.graph,proposal=graph?.proposal;
   app.innerHTML = `${header(false)}<button id="back" class="back">← 本から拾ったもの</button>
     <article><div class="detail-head"><p class="eyebrow">${source}${c.source_inherited ? '（前回の本から引き継ぎ）' : ''}${sourceLocator} · ${date(c.created_at)}</p>
     <h1>${esc(h?.summary || '原資料を残しました。')}</h1>${label ? `<p class="status ${esc(c.job?.state)}">${esc(label)}</p>` : ''}
     ${['failed','blocked'].includes(c.job?.state) ? `<p class="subtle">${esc(errors[c.job.error_code] || '原資料は残っています。詳細から再試行できます。')}</p>` : ''}</div>
-    ${h ? `<section class="detail-section"><h2>拾った知見</h2>${h.claims.map(claim => `<div class="knowledge-item"><p><span class="origin">${({ source:'資料の主張', user:'自分の発言', ai:'AIの推論' })[claim.evidence.origin]} · ${({ explicit:'根拠あり', inferred:'推論', uncertain:'不確か' })[claim.evidence.certainty]}</span></p>
+    ${h ? `<section class="detail-section"><h2>拾った知見</h2>${h.claims.map(claim => `<div class="knowledge-item"><p><span class="origin">${({ source:'資料の主張', user:'自分の発言', ai:'AIの推論' })[claim.evidence.origin]} · ${({ explicit:'記録あり', inferred:'推論', uncertain:'不確か' })[claim.evidence.certainty]}</span></p>
       <p>${esc(claim.text)}</p>${claim.conditions.length ? `<p class="subtle">条件：${claim.conditions.map(esc).join('、')}</p>` : ''}${claim.evidence.quote ? `<blockquote>${esc(claim.evidence.quote)}</blockquote>` : ''}</div>`).join('')}
       ${h.concepts.length ? `<p class="concepts">${h.concepts.map(k => esc(k.name)).join(' · ')}</p>` : ''}</section>
       ${h.questions.length ? `<section class="detail-section"><h2>考えの続き</h2>${h.questions.map(q => `<p>${esc(q.text)}</p>`).join('')}</section>` : ''}
-      ${h.view_draft ? `<section class="draft"><h2>${adopted ? '自分の見方に残しました' : '見方の案 · AIが考えたこと'}</h2><p class="prose">${esc(h.view_draft.text)}</p><p class="subtle">${esc(h.view_draft.reason)}</p>
+      ${graphMarkup(graph)}
+      ${proposal ? `<section class="draft"><h2>見方への影響 · AIの修正案</h2><p class="subtle">${esc(proposal.reason)}</p><details class="fold"><summary>変更する箇所と理由を読む</summary><p class="subtle">いまの文章</p><p class="prose">${esc(proposal.from_text)}</p><p class="subtle">修正案</p><p class="prose">${esc(proposal.to_text)}</p><button class="quiet" data-hide="${esc(`proposal:${proposal.view_id}:${proposal.from_text}:${proposal.to_text}`)}">この案を表示しない</button></details>${proposal.stale?'<p class="subtle">現行の見方に合わせて、自動で比較し直しています。</p>':'<button id="adopt-proposal" class="primary">この見方に更新</button>'}</section>` : h.view_draft ? `<section class="draft"><h2>${adopted ? '自分の見方に残しました' : '見方の案 · AIが考えたこと'}</h2><p class="prose">${esc(h.view_draft.text)}</p><p class="subtle">${esc(h.view_draft.reason)}</p>
       ${adopted ? `<a href="#" id="adopted-view">採用した見方と履歴を読む</a>` : '<button id="adopt" class="primary">自分の見方にする</button>'}</section>` : ''}
       ${h.uncertainties.length ? `<p class="subtle">読み取りの留保：${h.uncertainties.map(esc).join(' ／ ')}</p>` : ''}` : ''}
     <details class="fold" id="original"><summary>原資料を読む</summary>
@@ -240,6 +249,12 @@ function renderCapture() {
   bind('#adopted-view', 'click', event => { event.preventDefault(); openView(adopted.id).catch(e => showNotice(e.message)); });
   bind('#correct', 'click', () => correctionDialog(c));
   bind('#supplement', 'click', () => recordDialog(c));
+  document.querySelectorAll('[data-evidence]').forEach(el=>el.addEventListener('click',event=>{event.preventDefault();openCapture(el.dataset.evidence).then(()=>$('#original').open=true).catch(e=>showNotice(e.message));}));
+  document.querySelectorAll('[data-hide]').forEach(el=>el.addEventListener('click',async()=>{try{await api(`/api/captures/${c.id}/hide`,json('POST',{version:c.version,item_key:el.dataset.hide}));await openCapture(c.id);}catch(e){showNotice(e.message);}}));
+  bind('#adopt-proposal','click',async()=>{
+   try{const result=await api(`/api/captures/${c.id}/proposal`,json('POST',{version:c.version,proposal_id:proposal.id}));await openView(result.id);showNotice('自分の見方を更新しました。');}
+   catch(e){showNotice(e.message);await openCapture(c.id);}
+  });
   bind('#ask', 'click', () => {
     modal('この資料について聞く', '<form id="ask-form" class="field-stack"><label><span>短い質問</span><input id="ask-question" required maxlength="1000" placeholder="この条件は、なぜ必要？"></label><p class="subtle">保存した範囲だけで答えます。</p><p id="ask-error" class="error" role="alert"></p><button class="primary">聞く</button></form>');
     bind('#ask-form','submit',async event => {
@@ -255,7 +270,7 @@ function renderCapture() {
     catch (e) { showNotice(e.message); }
   });
   bind('#delete', 'click', () => {
-    modal('この記録を削除する', '<p>原資料・解析・採用した見方とその履歴を削除します。戻せません。</p><p id="delete-error" class="error" role="alert"></p><button id="confirm-delete" class="primary">削除する</button>');
+    modal('この記録を削除する', '<p>原資料とAI解析を削除します。戻せません。採用した見方と履歴は残し、根拠が削除されたことを表示します。</p><p id="delete-error" class="error" role="alert"></p><button id="confirm-delete" class="primary">削除する</button>');
     bind('#confirm-delete', 'click', async () => {
       try { await api(`/api/captures/${c.id}`, json('DELETE', { version:c.version })); closeDialog(); await home(); showNotice('削除しました。'); }
       catch (e) { $('#delete-error').textContent = e.message; }
@@ -284,9 +299,9 @@ async function openView(viewId) {
   app.innerHTML = `${header(false)}<button id="back" class="back">← 本から拾ったもの</button><article>
     <div class="detail-head"><p class="eyebrow">自分の見方 · 第${v.version}版</p><h1 class="prose">${esc(v.body)}</h1></div>
     <section class="detail-section"><h2>この見方の根拠</h2><p>${esc(v.revisions[0].references.source_title || '残した資料')}${v.revisions[0].references.page ? ` · p.${esc(v.revisions[0].references.page)}` : ''}</p>
-    <a href="#" id="view-source">原資料と解析を読む</a></section>
+    ${v.evidence_issues?.some(x=>x.capture_id===v.capture_id&&x.state==='deleted')?'': '<a href="#" id="view-source">原資料と解析を読む</a>'}${v.evidence_issues?.length?'<p class="subtle">根拠の資料が訂正・削除されています。この見方の文章は維持しています。採用時の根拠は履歴に残っています。</p>':''}</section>
     <details class="fold"><summary>見方を編集・履歴を読む</summary><button id="edit-view" class="quiet">見方を編集する</button>
-    ${v.revisions.map(r => `<div class="history"><p class="subtle">第${r.version}版 · ${date(r.created_at)}</p><p class="prose">${esc(r.body)}</p><p class="subtle">${esc(r.reason)}</p>${r.version !== v.version ? `<button data-restore="${r.version}">この版へ戻す</button>` : ''}</div>`).join('')}</details></article>`;
+    ${v.revisions.map(r => `<div class="history"><p class="subtle">第${r.version}版 · ${date(r.created_at)}</p><p class="prose">${esc(r.body)}</p><p class="subtle">${esc(r.reason)}</p><details class="fold"><summary>採用時の根拠を読む</summary><p>${esc(r.references.source_title||'出典未確認')}</p>${r.references.harvest_snapshot?.claims?.map(c=>`<blockquote>${esc(c.evidence.quote||c.text)}</blockquote>`).join('')||''}${r.references.evidence?.map(e=>`<blockquote>${esc(e.quote||e.snapshot?.text||'AI推論')}</blockquote>`).join('')||''}</details>${r.version !== v.version ? `<button data-restore="${r.version}">この版へ戻す</button>` : ''}</div>`).join('')}</details></article>`;
   wireHeader(); bind('#back','click', () => home().catch(e => showNotice(e.message)));
   bind('#view-source','click', event => { event.preventDefault(); openCapture(v.capture_id).catch(e => showNotice(e.message)); });
   bind('#edit-view','click', () => {
@@ -309,9 +324,9 @@ async function openView(viewId) {
 
 function privacyDialog() {
   modal('AIと保存について', `<div class="privacy"><p>残した写真・音声・文章は、このアプリの非公開データとして保存します。</p>
-    <p>解析には、対象の原資料、自分の一言、前回の書名だけをOpenAIへ送ります。過去の読書メモ一式は送りません。通常の記録ごとに確認操作はありません。</p>
+    <p>解析には、対象の原資料、自分の一言、前回の書名だけをOpenAIへ送ります。横断接続には、過去の関連候補を最大12記録・120ノードと、現行の見方を最大6件送ります。通常の記録ごとに確認操作はありません。</p>
     <p>AIが作るのは知見と見方の案です。「自分の見方にする」を選んだ文章だけが、本人の見方として残ります。</p>
-    <p class="subtle">${state?.ai_configured ? 'AI解析は設定済みです。' : 'AI解析は未設定です。原資料を保存して待ちます。'}<br>今日の呼び出し ${state?.usage.calls || 0} / ${state?.daily_limit || '—'}（UTC日次）。音声は文字起こしと理解で通常2回。<br>解析は有料APIを使います。上限は呼び出し数で、金額上限ではありません。</p>
+    <p class="subtle">${state?.ai_configured ? 'AI解析は設定済みです。' : 'AI解析は未設定です。原資料を保存して待ちます。'}<br>今日の呼び出し ${state?.usage.calls || 0} / ${state?.daily_limit || '—'}（UTC日次）。写真・文章は読み取りと横断整理で通常2回、音声は文字起こしを含めて通常3回。<br>解析は有料APIを使います。上限は呼び出し数で、金額上限ではありません。</p>
     <p class="subtle">削除は記録の詳細から。書き出しには元ファイルと履歴も含みます。</p></div>`);
 }
 
@@ -320,10 +335,10 @@ setInterval(async () => {
   if (!state || document.hidden || dialog.open || uploading || pollBusy) return;
   pollBusy = true;
   try {
-    if (currentCapture && ['pending','running','blocked'].includes(currentCapture.job?.state)) {
+    if (currentCapture && (['pending','running','blocked'].includes(currentCapture.job?.state)||['pending','running','blocked'].includes(currentCapture.graph?.job?.state))) {
       if (!app.querySelector('details[open]')) {
         const fresh = await api(`/api/captures/${currentCapture.id}`);
-        if (fresh.job?.state !== currentCapture.job?.state || fresh.version !== currentCapture.version) { currentCapture = fresh; renderCapture(); }
+        if (fresh.job?.state !== currentCapture.job?.state || fresh.version !== currentCapture.version || fresh.graph?.job?.state !== currentCapture.graph?.job?.state || fresh.graph?.generation_id !== currentCapture.graph?.generation_id) { currentCapture = fresh; renderCapture(); }
       }
     } else if (!currentCapture && !currentView) {
       state = await api(`/api/state?q=${encodeURIComponent(query)}`); renderFeed();
