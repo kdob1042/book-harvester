@@ -1,0 +1,12 @@
+ALTER TABLE sessions ADD COLUMN generation TEXT NOT NULL DEFAULT '';
+CREATE TABLE mutation_receipts(operation_id TEXT PRIMARY KEY,request_hash TEXT NOT NULL,path TEXT NOT NULL,method TEXT NOT NULL,result_json TEXT NOT NULL,created_at INTEGER NOT NULL);
+CREATE TABLE capture_tombstones(capture_id TEXT PRIMARY KEY,request_key TEXT UNIQUE NOT NULL,request_hash TEXT NOT NULL,version INTEGER NOT NULL,deleted_at INTEGER NOT NULL);
+CREATE TABLE sync_events(sequence INTEGER PRIMARY KEY AUTOINCREMENT,entity TEXT NOT NULL,entity_id TEXT NOT NULL,version INTEGER,action TEXT NOT NULL,created_at INTEGER NOT NULL);
+CREATE TRIGGER capture_created AFTER INSERT ON captures BEGIN INSERT INTO sync_events(entity,entity_id,version,action,created_at) VALUES('capture',NEW.id,NEW.version,'upsert',NEW.updated_at); END;
+CREATE TRIGGER capture_changed AFTER UPDATE ON captures BEGIN INSERT INTO sync_events(entity,entity_id,version,action,created_at) VALUES('capture',NEW.id,NEW.version,'upsert',NEW.updated_at); END;
+CREATE TRIGGER capture_deleted BEFORE DELETE ON captures BEGIN INSERT OR REPLACE INTO capture_tombstones VALUES(OLD.id,OLD.request_key,OLD.request_hash,OLD.version,CAST(unixepoch('subsec')*1000 AS INTEGER)); INSERT INTO sync_events(entity,entity_id,version,action,created_at) VALUES('capture',OLD.id,OLD.version,'delete',CAST(unixepoch('subsec')*1000 AS INTEGER)); END;
+CREATE TRIGGER view_created AFTER INSERT ON views BEGIN INSERT INTO sync_events(entity,entity_id,version,action,created_at) VALUES('view',NEW.id,NEW.version,'upsert',NEW.created_at); END;
+CREATE TRIGGER view_changed AFTER UPDATE ON views BEGIN INSERT INTO sync_events(entity,entity_id,version,action,created_at) VALUES('view',NEW.id,NEW.version,'upsert',CAST(unixepoch('subsec')*1000 AS INTEGER)); END;
+CREATE TRIGGER view_deleted AFTER DELETE ON views BEGIN INSERT INTO sync_events(entity,entity_id,version,action,created_at) VALUES('view',OLD.id,OLD.version,'delete',CAST(unixepoch('subsec')*1000 AS INTEGER)); END;
+CREATE TRIGGER harvest_synced AFTER INSERT ON harvests BEGIN INSERT INTO sync_events(entity,entity_id,version,action,created_at) VALUES('capture',NEW.capture_id,NEW.version,'upsert',NEW.created_at); END;
+CREATE TRIGGER graph_synced AFTER INSERT ON graph_generations BEGIN INSERT INTO sync_events(entity,entity_id,version,action,created_at) VALUES('capture',NEW.capture_id,NEW.version,'upsert',NEW.created_at); END;

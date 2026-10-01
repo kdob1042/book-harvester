@@ -113,3 +113,10 @@ dialog::backdrop { background:#29363045; backdrop-filter:blur(3px); }
   dialog { padding:24px; }
 }
 @media(prefers-reduced-motion:no-preference) { button { transition:background .12s,color .12s; } }
+.local-graph { width:100%; height:auto; color:var(--ink); }
+.local-graph rect { fill:var(--paper); stroke:var(--line); }
+.local-graph text { fill:var(--ink); font-size:17px; }
+.local-graph .graph-kind { font-size:12px; }
+
+.fold { overflow-wrap:anywhere; }
+.menu-panel { max-height:75dvh; overflow-y:auto; }

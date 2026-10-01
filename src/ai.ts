@@ -6,8 +6,8 @@ export class AiError extends Error {
  code:string; retryable:boolean;
  constructor(code:string,retryable=false){super(code);this.code=code;this.retryable=retryable;}
 }
-type ProviderResult={status?:string;output?:{content?:{type:string;text?:string}[]}[];text?:string;usage?:{input_tokens?:number;output_tokens?:number}};
-export async function call(env:Env,captureId:string,endpoint:string,model:string,payload:FormData|Record<string,unknown>,fetcher:typeof fetch=fetch):Promise<ProviderResult> {
+type ProviderResult={status?:string;output?:{type?:string;action?:{sources?:{url?:string}[]};content?:{type:string;text?:string;annotations?:{url?:string}[]}[]}[];data?:{embedding:number[]}[];text?:string;usage?:{input_tokens?:number;prompt_tokens?:number;output_tokens?:number}};
+export async function call(env:Env,captureId:string|null,endpoint:string,model:string,payload:FormData|Record<string,unknown>,fetcher:typeof fetch=fetch):Promise<ProviderResult> {
  if(!env.OPENAI_API_KEY)throw new AiError('ai_not_configured');
  const day=new Date().toISOString().slice(0,10),callId=id(),limit=Number(env.AI_DAILY_CALL_LIMIT);
  const count=await stmt(env,`INSERT INTO ai_daily(day,calls) VALUES(?,1)
@@ -23,7 +23,7 @@ export async function call(env:Env,captureId:string,endpoint:string,model:string
   });
   if(!response.ok){await response.body?.cancel();throw new AiError(response.status===429?'rate_limit':response.status>=500?'provider_unavailable':'provider_rejected',response.status===429||response.status>=500);}
   const data=await response.json<ProviderResult>();
-  await stmt(env,'UPDATE ai_calls SET state=?,input_tokens=?,output_tokens=? WHERE id=?','completed',data.usage?.input_tokens||0,data.usage?.output_tokens||0,callId).run();
+  await stmt(env,'UPDATE ai_calls SET state=?,input_tokens=?,output_tokens=? WHERE id=?','completed',data.usage?.input_tokens??data.usage?.prompt_tokens??0,data.usage?.output_tokens||0,callId).run();
   return data;
  } catch(e) {
   await stmt(env,'UPDATE ai_calls SET state=? WHERE id=?','failed',callId).run();
@@ -42,6 +42,7 @@ export async function harvest(env:Env,capture:Capture,assets:Asset[],transcript:
  const content:({type:'input_text';text:string}|{type:'input_image';image_url:string;detail:'high'})[]=[{type:'input_text',text:JSON.stringify({
   input_kind:capture.kind,has_audio:assets.some(a=>a.mime.startsWith('audio/')),original_or_corrected_text:inputText,
   corrected_text:capture.corrected_text,audio_transcript:transcript,user_note:capture.note,previous_source_context:capture.source_title,
+  import_origin:capture.import_origin||null,source_locator:capture.source_locator||null,
  })}];
  for(const asset of assets.filter(a=>a.mime.startsWith('image/'))){
   const original=await env.ORIGINALS.get(asset.object_key);if(!original)throw new AiError('original_missing');
@@ -57,8 +58,10 @@ export async function harvest(env:Env,capture:Capture,assets:Asset[],transcript:
  if(blocks.some(b=>b.type==='refusal'))throw new AiError('refused');
  try {
   const result=validateHarvest(JSON.parse(blocks.filter(b=>b.type==='output_text').map(b=>b.text).join('')),`${inputText}\n${transcript}\n${capture.note}`) as Harvest;
+  if(capture.import_origin==='ai'&&result.claims.some(c=>c.evidence.origin==='source'||c.evidence.origin==='user'&&!capture.note.includes(c.evidence.quote||'\0')))throw new AiError('invalid_import_attribution');
+  if(!assets.some(a=>a.mime.startsWith('image/'))&&result.claims.some(c=>c.evidence.origin!=='ai'&&!`${inputText}\n${transcript}\n${capture.note}`.includes(c.evidence.quote||'\0')))throw new AiError('invalid_quote');
   return {result,usage:data.usage||{}};
- } catch {throw new AiError('invalid_output');}
+ } catch(e) {if(e instanceof AiError)throw e;throw new AiError('invalid_output');}
 }
 export async function answer(env:Env,capture:Capture,h:Harvest,question:string,fetcher?:typeof fetch) {
  const material=`${capture.corrected_text??h.extracted_text}\n${capture.note}`;

@@ -1,0 +1,6 @@
+CREATE TABLE embedding_jobs(capture_id TEXT PRIMARY KEY REFERENCES captures(id) ON DELETE CASCADE,version INTEGER NOT NULL,state TEXT NOT NULL DEFAULT 'pending',attempts INTEGER NOT NULL DEFAULT 0,available_at INTEGER NOT NULL,dispatched_at INTEGER,lease_token TEXT,lease_until INTEGER,error_code TEXT);
+CREATE TABLE embeddings(capture_id TEXT PRIMARY KEY REFERENCES captures(id) ON DELETE CASCADE,version INTEGER NOT NULL,input_hash TEXT NOT NULL,model TEXT NOT NULL,vector_json TEXT NOT NULL,created_at INTEGER NOT NULL);
+CREATE TABLE search_vectors(query_hash TEXT PRIMARY KEY,vector_json TEXT NOT NULL,created_at INTEGER NOT NULL);
+CREATE TABLE concept_edits(id TEXT PRIMARY KEY,action TEXT NOT NULL,reason TEXT NOT NULL,before_json TEXT NOT NULL,after_json TEXT NOT NULL,state TEXT NOT NULL DEFAULT 'proposed',created_at INTEGER NOT NULL,applied_at INTEGER,undone_at INTEGER);
+CREATE TABLE concept_overrides(node_id TEXT PRIMARY KEY REFERENCES graph_nodes(id) ON DELETE CASCADE,base_concept TEXT NOT NULL,concept_id TEXT NOT NULL REFERENCES concepts(id),edit_id TEXT NOT NULL REFERENCES concept_edits(id));
+CREATE VIEW effective_concept_mentions AS SELECT m.*,COALESCE(o.concept_id,m.concept_id) AS effective_id FROM concept_mentions m LEFT JOIN concept_overrides o ON o.node_id=m.node_id AND o.base_concept=m.concept_id;

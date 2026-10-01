@@ -89,5 +89,5 @@ test('source deletion removes originals and AI derivatives while adopted text/hi
  const f=await fixture();t.after(f.close);await f.login();const captureId=await save(f);await f.drain();await f.request(`/api/captures/${captureId}/adopt`,json('POST',{version:1}));
  assert.equal((await f.request(`/api/captures/${captureId}`,json('DELETE',{version:1}))).status,200);
  for(const table of ['captures','assets','jobs','harvests','capture_revisions','sources','graph_jobs','graph_generations','graph_nodes','concepts'])assert.equal(f.db.prepare(`SELECT count(*) AS n FROM ${table}`).get().n,0,table);
- assert.equal(f.db.prepare('SELECT count(*) AS n FROM views').get().n,1);assert.equal(f.db.prepare('SELECT count(*) AS n FROM view_revisions').get().n,1);assert.equal(f.objects.size,0);assert.equal(f.db.prepare('SELECT calls FROM ai_daily').get().calls,2);
+ assert.equal(f.db.prepare('SELECT count(*) AS n FROM views').get().n,1);assert.equal(f.db.prepare('SELECT count(*) AS n FROM view_revisions').get().n,1);assert.equal(f.objects.size,0);assert.equal(f.db.prepare('SELECT calls FROM ai_daily').get().calls,3); // Harvest, graph, and semantic index.
 });
