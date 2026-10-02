@@ -1,0 +1,2 @@
+CREATE TABLE theme_changes(id TEXT PRIMARY KEY,theme_id TEXT NOT NULL REFERENCES themes(id),action TEXT NOT NULL,reason TEXT NOT NULL,state TEXT NOT NULL DEFAULT 'proposed',theme_ids_json TEXT NOT NULL,before_json TEXT NOT NULL,after_json TEXT NOT NULL,applied_json TEXT,undo_json TEXT,created_at INTEGER NOT NULL,applied_at INTEGER,undone_at INTEGER);
+CREATE TABLE capture_visibility(capture_id TEXT PRIMARY KEY REFERENCES captures(id) ON DELETE CASCADE,hidden INTEGER NOT NULL,updated_at INTEGER NOT NULL);
