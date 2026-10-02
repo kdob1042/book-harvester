@@ -2,6 +2,7 @@ import {stmt,id,now,fail,revisionStatement,jobStatement} from './core.ts';
 import {stageAsset,type Input} from './input.ts';
 export type SourceContext={title?:string|null;page?:string|null;locator?:string|null;origin?:string;locked?:boolean;guard?:{sql:string;values:(string|number|null)[]};onSaved?:(captureId:string)=>D1PreparedStatement};
 export async function storeCapture(env:Env,key:string,input:Input,context:SourceContext={}){
+ if(input.source!==undefined&&context.title===undefined)context={...context,title:input.source||null,origin:'user',locked:true};
  if(await stmt(env,'SELECT capture_id FROM capture_tombstones WHERE request_key=?',key).first())fail(410,'この保存操作の記録は削除済みです。自動で復元しません。');
  const prior=await stmt(env,'SELECT id,request_hash FROM captures WHERE request_key=?',key).first<{id:string;request_hash:string}>();
  if(prior){if(prior.request_hash!==input.hash)fail(409,'同じ保存操作で異なる内容が届きました。');return {id:prior.id,duplicate:true};}
