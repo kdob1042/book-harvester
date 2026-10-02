@@ -79,6 +79,32 @@ audio { width:100%; }
 .loading { margin:20vh auto; text-align:center; color:var(--muted); }
 dialog { border:1px solid var(--line); border-radius:20px; background:var(--surface); color:var(--ink); padding:30px; width:min(500px,calc(100% - 28px)); max-height:90dvh; overflow-y:auto; }
 dialog::backdrop { background:#29363045; backdrop-filter:blur(3px); }
+dialog:has(#drilldown-panel) { width:min(820px,calc(100% - 28px)); }
+.dd-origin { overflow-wrap:anywhere; font-size:14px; color:var(--muted); }
+#drilldown-status { margin:18px 0 8px; font-size:14px; }
+#drilldown-panel input[type=checkbox] { width:18px; height:18px; padding:0; accent-color:var(--green); flex-shrink:0; }
+.dd-candidate { border:1px solid var(--line); border-radius:16px; padding:18px; margin:16px 0; }
+.dd-adopt { display:flex; align-items:center; gap:8px; margin-bottom:18px; font-size:13px; }
+.dd-parents { display:flex; flex-direction:column; gap:12px; margin-left:32px; }
+.dd-parent { position:relative; display:flex; flex-wrap:wrap; align-content:start; align-items:center; gap:6px; border:1px solid var(--line); border-radius:12px; padding:12px; cursor:pointer; }
+.dd-parent.dd-attached { border-color:var(--green); background:var(--soft); }
+.dd-parent span { margin:0; }
+.dd-parent-title { width:100%; overflow-wrap:anywhere; color:var(--ink); font-size:14px; line-height:1.7; }
+.dd-parent.dd-attached:after { content:""; position:absolute; left:-14px; top:50%; width:14px; border-top:2px solid var(--green); }
+.dd-child { position:relative; margin-top:22px; border:1px solid var(--green); border-radius:12px; padding:12px; }
+.dd-child:before { content:""; position:absolute; height:7px; width:7px; top:-8px; left:14px; border-right:2px solid var(--green); border-bottom:2px solid var(--green); transform:rotate(45deg); }
+.dd-parents:has(.dd-attached) { position:relative; }
+.dd-parents:has(.dd-attached):after { content:""; position:absolute; bottom:-22px; left:-14px; height:calc(100% + 22px); border-left:2px solid var(--green); }
+.dd-kind { display:block; color:var(--muted); font-size:12px; }
+.dd-child textarea { display:block; background:transparent; border:0; border-radius:0; padding:4px 0; min-height:0; width:100%; font-size:16px; font-weight:550; line-height:1.7; overflow:hidden; resize:none; }
+.dd-content { margin-top:16px; }
+.dd-content textarea { min-height:0; font-size:14px; line-height:1.8; overflow:hidden; resize:none; }
+.dd-candidate .fold { margin:12px 0 0; }
+.dd-candidate .back { margin:12px 0 0; }
+#drilldown-manual { border-top:1px solid var(--line); padding-top:20px; margin-top:18px; }
+#drilldown-form input { width:100%; margin-bottom:12px; }
+#drilldown-title { min-height:80px; }
+@media(max-width:540px){ .dd-candidate { padding:12px; } .dd-parent { padding:10px; } }
 .dialog-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; gap:12px; }
 .dialog-head h2 { margin:0; font-size:20px; }
 .dialog-head button { font-size:23px; }

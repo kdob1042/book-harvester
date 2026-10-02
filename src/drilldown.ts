@@ -8,6 +8,15 @@ export function validateDrilldown(value:any){
  if(!Array.isArray(value?.candidates)||value.candidates.length<2||value.candidates.length>3)throw new AiError('invalid_output');
  return value.candidates.map((c:any)=>{if(!c||typeof c.question!=='string'||!c.question.trim()||c.question.length>200||typeof c.content!=='string'||c.content.length>10000||typeof c.reason!=='string'||!c.reason.trim()||c.reason.length>1000)throw new AiError('invalid_output');if(c.target!==undefined&&!['selected','opposite','both'].includes(c.target))throw new AiError('invalid_output');if(c.opposite_id!==undefined&&c.opposite_id!==null&&typeof c.opposite_id!=='string')throw new AiError('invalid_output');return {question:c.question.trim(),content:c.content.trim()||null,reason:c.reason.trim(),target:c.target||'selected',opposite_id:c.opposite_id||null};});
 }
+export async function readDrilldown(env:Env,parentId:string){
+ const parent=await stmt(env,"SELECT id,question,version FROM themes WHERE id=? AND state='active' AND merged_into IS NULL",parentId).first<any>();if(!parent)fail(404,'問いが見つかりません。');
+ const run=await stmt(env,'SELECT * FROM drilldown_runs WHERE parent_id=? AND parent_version=? ORDER BY created_at DESC,rowid DESC LIMIT 1',parentId,parent.version).first<any>();
+ if(!run)return {parent,run:null};
+ const candidates=JSON.parse(run.result_json),saved=await rows<{candidate_index:number,child_id:string,question:string,content:string|null}>(env,'SELECT c.candidate_index,c.child_id,t.question,t.content FROM drilldown_choices c JOIN themes t ON t.id=c.child_id WHERE c.run_id=?',run.id);
+ const links=await rows<{parent_id:string,child_id:string}>(env,'SELECT r.parent_id,r.child_id FROM question_relations r JOIN drilldown_choices c ON c.child_id=r.child_id WHERE c.run_id=?',run.id);
+ for(const choice of saved){const c=candidates[choice.candidate_index];if(c){c.question=choice.question;c.content=choice.content;const parents=links.filter(p=>p.child_id===choice.child_id);const source=parents.some(p=>p.parent_id===parentId),other=parents.find(p=>p.parent_id!==parentId);c.target=source?(other?'both':'selected'):'opposite';c.opposite_id=other?.parent_id||null;}}
+ return {parent,run:{id:run.id,candidates,oppositions:JSON.parse(run.oppositions_json),saved}};
+}
 export async function drilldown(env:Env,parentId:string,input:Record<string,unknown>,fetcher?:typeof fetch){
  const context=await synthesisInput(env,parentId);if(context.theme.state!=='active'||context.theme.merged_into||context.theme.version!==Number(input.version))fail(409,'問いが更新されています。');
  if(input.direction!==undefined&&(typeof input.direction!=='string'||input.direction.length>1000))fail(400,'方向は1000文字以内で入力してください。');

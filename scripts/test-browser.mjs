@@ -14,6 +14,7 @@ const suites = {
  proposals: 'integration-proposals-browser-smoke.mjs'
 };
 const featureSuites = {
+ 'public/drilldown-panel.js': ['drilldown','activity'],
  'public/ai-activity.js': ['activity'],
  'public/ai-activity.css': ['activity'],
  'src/auth.ts': ['auth'],
