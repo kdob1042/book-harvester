@@ -2,6 +2,7 @@ import {execFileSync, spawnSync} from 'node:child_process';
 
 const suites = {
  auth: 'auth-browser-smoke.mjs',
+ activity: 'ai-activity-browser-smoke.mjs',
  capture: 'browser-smoke.mjs',
  expansion: 'expansion-smoke.mjs',
  ideas: 'ideas-smoke.mjs',
@@ -13,6 +14,8 @@ const suites = {
  proposals: 'integration-proposals-browser-smoke.mjs'
 };
 const featureSuites = {
+ 'public/ai-activity.js': ['activity'],
+ 'public/ai-activity.css': ['activity'],
  'src/auth.ts': ['auth'],
  'src/ideas.ts': ['ideas'],
  'src/themes.ts': ['themes','discovery','drilldown','proposals'],

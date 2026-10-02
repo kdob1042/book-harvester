@@ -24,6 +24,6 @@
 
 型検査・短時間のユニットテスト・WorkerビルドはCIで維持する。PRのブラウザ検証は `scripts/test-browser.mjs` が変更ファイルから選ぶ。共通処理・未分類のコード変更は全件を選ぶ。文書やユニットテストのみの変更はブラウザを起動しない。
 
-main/devへのpush、および `npm run test:browser` の手動実行は全10スイートを実施する。`BROWSER_TEST_BASE=<コミット> node scripts/test-browser.mjs --list` で選択を確認できる。比較先が取得できない場合は失敗させ、検証を黙って省略しない。
+main/devへのpush、および `npm run test:browser` の手動実行は全11スイートを実施する。`BROWSER_TEST_BASE=<コミット> node scripts/test-browser.mjs --list` で選択を確認できる。比較先が取得できない場合は失敗させ、検証を黙って省略しない。
 
 追加した回帰テストは旧分類の一括読み込みと問い合わせ増加、共有・循環のある階層、深い履歴のスタック超過に絞る。既存の有効な回帰テストは削除しない。

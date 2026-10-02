@@ -143,13 +143,20 @@ export async function manageThemeMigration(env:Env,input:Record<string,unknown>)
 export async function editTheme(env:Env,themeId:string,input:Record<string,unknown>){const t=await stmt(env,'SELECT * FROM themes WHERE id=?',themeId).first<Theme>();if(!t||t.version!==Number(input.version))fail(409,'テーマが更新されています。');const question=typeof input.question==='string'?text(input.question,200).trim():t.question,scope=typeof input.scope==='string'?text(input.scope,1000).trim():t.scope,exclusions=typeof input.exclusions==='string'?text(input.exclusions,1000):t.exclusions;const content=Object.hasOwn(input,'content')?questionContent(input.content):t.content;if(!question)fail(400,'主題を入力してください。');const saved=await env.DB.batch([stmt(env,`INSERT INTO theme_history SELECT ?,?,'edit',?,?,? WHERE EXISTS(SELECT 1 FROM themes WHERE id=? AND version=?)`,id(),themeId,text(input.reason||'本人によるテーマの訂正',1000),JSON.stringify(t),now(),themeId,t.version),stmt(env,`UPDATE themes SET question=?,scope=?,exclusions=?,content=?,version=version+1 WHERE id=? AND version=?`,question,scope,exclusions,content,themeId,t.version)]);if(!saved[1].meta.changes)fail(409,'テーマが更新されています。');return readTheme(env,themeId);}
 export async function deleteTheme(env:Env,themeId:string,input:Record<string,unknown>){
  const t=await stmt(env,"SELECT * FROM themes WHERE id=? AND state='active' AND merged_into IS NULL",themeId).first<Theme>();if(!t||t.version!==Number(input.version))fail(409,'問いが更新されています。');
- const group=await rows<{original_id:string}>(env,'SELECT original_id FROM canonical_question_ids WHERE id=?',themeId),ids=[...new Set(group.map(x=>x.original_id).concat(themeId))];
- const placeholders=ids.map(()=>'?').join(','),before=JSON.stringify({theme:t,identity_ids:ids}),guard="EXISTS(SELECT 1 FROM themes WHERE id=? AND version=? AND state='active')",values=[themeId,t.version];
+ // Follow both integration and drilldown edges, resolving identity aliases at every depth.
+ // UNION also deduplicates shared descendants and terminates for legacy cyclic graphs.
+ const subtree=`WITH RECURSIVE descendants(id) AS (SELECT ? UNION SELECT e.child_id FROM canonical_question_edges e JOIN descendants d ON e.parent_id=d.id) SELECT t.* FROM themes t JOIN canonical_question_ids c ON c.original_id=t.id JOIN descendants d ON d.id=c.id WHERE t.state<>'deleted'`;
+ const group=await rows<Theme>(env,subtree,themeId),ids=group.map(x=>x.id),snapshot=JSON.stringify(group.map(x=>({id:x.id,version:x.version}))),idsJson=JSON.stringify(ids);
+ const gate=id(),preflight=`EXISTS(SELECT 1 FROM themes WHERE id=? AND version=? AND state='active' AND merged_into IS NULL) AND NOT EXISTS(SELECT id,version FROM (${subtree}) EXCEPT SELECT json_extract(value,'$.id'),json_extract(value,'$.version') FROM json_each(?)) AND NOT EXISTS(SELECT json_extract(value,'$.id'),json_extract(value,'$.version') FROM json_each(?) EXCEPT SELECT id,version FROM (${subtree}))`;
+ const guard='EXISTS(SELECT 1 FROM theme_history WHERE id=?)',values=[gate],targets='SELECT value FROM json_each(?)',time=now();
  const statements=[
-  stmt(env,`INSERT INTO theme_history SELECT ?,?,'delete','本人による問いの削除',?,? WHERE EXISTS(SELECT 1 FROM themes WHERE id=? AND version=? AND state='active')`,id(),themeId,before,now(),themeId,t.version),
-  stmt(env,`DELETE FROM question_relations WHERE (parent_id IN (${placeholders}) OR child_id IN (${placeholders})) AND ${guard}`,...ids,...ids,...values),
-  stmt(env,`DELETE FROM question_oppositions WHERE (left_id IN (${placeholders}) OR right_id IN (${placeholders})) AND ${guard}`,...ids,...ids,...values),
-  stmt(env,`UPDATE themes SET state='deleted',merged_into=NULL,version=version+1 WHERE id IN (${placeholders}) AND ${guard}`,...ids,...values)
+  // Freeze the checked subtree before changing its links; a concurrent edit rejects the entire batch.
+  stmt(env,`INSERT INTO theme_history SELECT ?,?,'delete','本人による問いと配下の問いの削除',?,? WHERE ${preflight}`,gate,themeId,JSON.stringify({theme:t,deleted_themes:group}),time,themeId,t.version,themeId,snapshot,snapshot,themeId),
+  stmt(env,`INSERT INTO theme_history SELECT lower(hex(randomblob(16))),json_extract(value,'$.id'),'delete','親の問いとまとめて削除',value,? FROM json_each(?) WHERE json_extract(value,'$.id')<>? AND ${guard}`,time,JSON.stringify(group),themeId,...values),
+  stmt(env,`DELETE FROM question_relations WHERE (parent_id IN (${targets}) OR child_id IN (${targets})) AND ${guard}`,idsJson,idsJson,...values),
+  stmt(env,`DELETE FROM question_oppositions WHERE (left_id IN (${targets}) OR right_id IN (${targets})) AND ${guard}`,idsJson,idsJson,...values),
+  stmt(env,`UPDATE theme_jobs SET state='cancelled',lease_token=NULL,lease_until=NULL,dispatched_at=NULL,error_code='theme_deleted' WHERE kind='synthesis' AND target_id IN (${targets}) AND ${guard}`,idsJson,...values),
+  stmt(env,`UPDATE themes SET state='deleted',merged_into=NULL,version=version+1 WHERE id IN (${targets}) AND ${guard}`,idsJson,...values)
  ];
  const saved=await env.DB.batch(statements);if(!saved[0].meta.changes)fail(409,'問いが更新されています。');return {ok:true,deleted_ids:ids};
 }
