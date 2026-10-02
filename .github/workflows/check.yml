@@ -8,8 +8,12 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    env:
+      BROWSER_TEST_BASE: ${{ github.event.pull_request.base.sha }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -18,5 +22,12 @@ jobs:
       - run: npm run check
       - run: npm test
       - run: npm run build
-      - run: npx playwright install --with-deps chromium
-      - run: npm run test:browser
+      - id: browser
+        run: |
+          suites=$(node scripts/test-browser.mjs --list)
+          if [ -n "$suites" ]; then echo "required=true" >> "$GITHUB_OUTPUT"; fi
+          echo "Browser suites: $suites"
+      - if: steps.browser.outputs.required == 'true'
+        run: npx playwright install --with-deps chromium
+      - if: steps.browser.outputs.required == 'true'
+        run: npm run test:browser

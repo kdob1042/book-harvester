@@ -1,3 +1,4 @@
+import {questionTree} from './question-tree.js';
 import {setDeviceAuthMethod,deviceRequest,initDevice,cacheRecent,pendingOperations,discardOperation,clearReadingCache,exportDevice,discardAllOutbox,resolveConflict,resume,lockDevice,deviceSettings,setDeviceSettings} from './offline.js';
 import {createAiActivity} from './ai-activity.js';
 import {mountDrilldown,clearDrilldowns} from './drilldown-panel.js';
@@ -612,12 +613,7 @@ initDevice().then(()=>resume()).catch(e=>showNotice(e.message));
 
 function themeHome(index){
  if(!index)return '';
- const themes=index.themes||[],byId=new Map(themes.map(t=>[t.id,t])),children=new Map();
- for(const edge of index.branches||[]){const child=byId.get(edge.child_id);if(!child||!byId.has(edge.parent_id))continue;const list=children.get(edge.parent_id)||[];if(!list.some(t=>t.id===child.id))list.push(child);children.set(edge.parent_id,list);}
- const count=(t,seen=new Set())=>{if(seen.has(t.id))return 0;seen.add(t.id);return Number(t.integration_count||0)+(children.get(t.id)||[]).reduce((n,c)=>n+count(c,seen),0);};
- const sort=list=>[...list].sort((a,b)=>count(b)-count(a)||Number(b.updated_at||0)-Number(a.updated_at||0)||a.id.localeCompare(b.id));
- const render=(t,seen=new Set())=>{if(seen.has(t.id))return '';const next=new Set(seen).add(t.id),branches=sort(children.get(t.id)||[]);return `<li><button class="capture-row theme-row" data-theme="${esc(t.id)}"><h2>${esc(t.question)}</h2></button>${branches.length?`<ul class="question-branches">${branches.map(c=>render(c,next)).join('')}</ul>`:''}</li>`;};
- return `<section class="theme-home" aria-label="問い"><button id="find-integration-proposals" class="quiet">統合案を探す</button><div id="integration-proposals"></div><ul class="question-roots">${sort(themes.filter(t=>t.is_tip!==0)).map(t=>render(t)).join('')}</ul></section>`;
+ return `<section class="theme-home" aria-label="問い"><button id="find-integration-proposals" class="quiet">統合案を探す</button><div id="integration-proposals"></div><ul class="question-roots">${questionTree(index,esc)}</ul></section>`;
 }
 function wireThemeLinks(){document.querySelectorAll('[data-theme]').forEach(el=>el.onclick=event=>{event.preventDefault();openTheme(el.dataset.theme).catch(e=>showNotice(e.message));});}
 async function openTheme(themeId,fromCapture=null){
