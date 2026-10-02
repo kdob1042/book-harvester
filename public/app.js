@@ -72,7 +72,7 @@ async function home() {
   const next = await api(searchPath());
   state = next; currentCapture = null; currentView = null;
   app.innerHTML = `${header()}<section class="intro"><p class="eyebrow">READ · LEAVE · THINK</p>
-    <h1>本から拾ったもの。</h1><p>${state.current_source ? `${esc(state.current_source.title)}<br>前回の本を引き継ぎます。表紙を残すと、本も切り替わります。` : '気になったページを、一枚。<br>整理はあとから、自然に。'}</p></section><section id="feed"></section>`;
+    <h1>残したもの。</h1><p>${state.current_source ? `${esc(state.current_source.title)}<br>前回の本を引き継ぎます。表紙を残すと、本も切り替わります。` : '気になったページを、一枚。<br>整理はあとから、自然に。'}</p></section><section id="feed"></section>`;
   app.removeAttribute('aria-busy'); wireHeader(); renderFeed();
   cacheRecent(state).catch(()=>{});
 }
@@ -82,11 +82,11 @@ function renderFeed() {
   const captures = state.captures;
   const deviceInfo=state.device&&(state.device.offline||state.device.pending||state.device.other_scope)?`<p class="subtle">${state.device.offline?'オフライン · 端末の読書キャッシュ':''} ${state.device.pending?`端末に保存・未送信 ${state.device.pending}件`:''} ${state.device.conflicts?`競合 ${state.device.conflicts}件`:''}${state.device.other_scope?' 別の保存先の未送信データは自動送信しません。':''} <button class="quiet" id="device-pending">保存状況を読む</button></p>`:'';
   const searchInfo=query?`<p class="subtle">${state.search_state==='semantic'?'言葉の一致と意味の近さから候補を探しています。意味の検索は索引のある最新1,000件が対象です。根拠は原資料で確認できます。':'言葉の一致から検索しています。意味の索引は設定・処理待ちです。'}</p>`:'';
-  $('#feed').innerHTML = `${deviceInfo}${searchInfo}${(state.reflections||[]).map(r=>`<button class="capture-row" data-reflection="${r.id}"><span class="row-meta">${({session:'この区切りの持ち帰り · 記録から推定',day:'一日の振り返り',week:'一週間の振り返り'})[r.scope]}</span><h2>${esc(r.result.summary)}</h2></button>`).join('')}${(state.revisits||[]).map(r=>`<button class="capture-row" data-capture="${r.id}"><span class="row-meta">以前の問いとの再会</span><h2>${esc(r.question)}</h2><p class="subtle">${esc(r.reason)}</p></button>`).join('')}${(state.imports||[]).length&&!query?`<details class="fold"><summary>取り込み状況</summary>${state.imports.map(i=>`<button class="capture-row" data-import="${i.id}"><span class="row-meta">${esc(importState(i.state))}</span>${esc(i.name)}</button>`).join('')}</details>`:''}${(state.research||[]).length&&!query?`<details class="fold"><summary>調査の続きを見る</summary>${state.research.map(r=>`<button class="capture-row" data-research="${r.id}"><span class="row-meta">${esc(researchState(r.state))}</span>${esc(r.question)}</button>`).join('')}</details>`:''}${captures.length ? '<p class="section-label">読書からの知見</p>' : ''}${captures.map(c => {
+  $('#feed').innerHTML = `${deviceInfo}${searchInfo}${(state.reflections||[]).map(r=>`<button class="capture-row" data-reflection="${r.id}"><span class="row-meta">${({session:'この区切りの持ち帰り · 記録から推定',day:'一日の振り返り',week:'一週間の振り返り'})[r.scope]}</span><h2>${esc(r.result.summary)}</h2></button>`).join('')}${(state.revisits||[]).map(r=>`<button class="capture-row" data-capture="${r.id}"><span class="row-meta">以前の問いとの再会</span><h2>${esc(r.question)}</h2><p class="subtle">${esc(r.reason)}</p></button>`).join('')}${(state.imports||[]).length&&!query?`<details class="fold"><summary>取り込み状況</summary>${state.imports.map(i=>`<button class="capture-row" data-import="${i.id}"><span class="row-meta">${esc(importState(i.state))}</span>${esc(i.name)}</button>`).join('')}</details>`:''}${(state.research||[]).length&&!query?`<details class="fold"><summary>調査の続きを見る</summary>${state.research.map(r=>`<button class="capture-row" data-research="${r.id}"><span class="row-meta">${esc(researchState(r.state))}</span>${esc(r.question)}</button>`).join('')}</details>`:''}${captures.length ? '<p class="section-label">記録からの知見</p>' : ''}${captures.map(c => {
     const summary = c.harvest?.summary || c.original_preview || (c.kind === 'image' ? '残したページ' : '残した音声');
     const label = c.local_only?(c.local_conflict?'端末に保存・送信できませんでした':'端末に保存・接続後に自動送信'):statusLabel(c);
     const locator = c.page ? ` · ${c.locator_certainty === 'inferred' ? '推定 ' : ''}p.${esc(c.page)}` : '';
-    return `<button class="capture-row" data-capture="${c.id}"><span class="row-meta"><span>${c.source_certainty === 'inferred' ? '推定 ' : ''}${esc(c.source_title || '出典未確認')}${c.source_inherited ? '（前回の本）' : ''}${locator}</span><span>${date(c.created_at)}</span></span>
+    return `<button class="capture-row" data-capture="${c.id}"><span class="row-meta"><span>${c.source_certainty === 'inferred' ? '推定 ' : ''}${esc(c.source_title || (c.import_origin==='user'?'自分のメモ':'出典未確認'))}${c.source_inherited ? '（前回の本）' : ''}${locator}</span><span>${date(c.created_at)}</span></span>
       <h2>${esc(summary)}</h2>${label ? `<span class="status ${esc(c.state)}">${esc(label)}</span>` : `<p class="question-preview">${esc(c.harvest?.questions[0]?.text || '原資料と、考えの続きを読む。')}</p>`}</button>`;
   }).join('')}${!captures.length ? `<div class="empty"><img class="empty-symbol" src="/favicon.svg" alt=""><h2>${query ? 'その言葉は、まだ見つかりません。' : '最初の一枚から、育っていきます。'}</h2><p>${query ? '別の言葉で探してみてください。' : '書名も、ページ番号も、タグも不要です。<br>写真を残したら、本の続きへ。'}</p></div>` : ''}
     ${state.views.length && !query && !state.filter_active ? `<p class="section-label">自分の見方</p>${state.views.map(v => `<button class="view-row" data-view="${v.id}"><span class="row-meta">自分の見方 · 第${v.version}版</span><h2>${esc(v.body)}</h2></button>`).join('')}` : ''}`;
@@ -101,7 +101,7 @@ function renderFeed() {
 async function openReflection(reflectionId){
  const r=await api(`/api/reflections/${reflectionId}`),v=r.result,input=r.input;currentCapture=null;currentView={id:r.id,reflection:true};
  const capLink=id=>{const c=input.captures.find(c=>c.id===id);return `<a href="#" data-ref-source="${id}">${esc(c?.source_title||'残した資料')}${c?.page?` · p.${esc(c.page)}`:''}</a>`;};
- app.innerHTML=`${header(false)}<button id="back" class="back">← 本から拾ったもの</button><article><div class="detail-head"><p class="eyebrow">${({session:'この区切りの持ち帰り · 記録から推定',day:'一日の振り返り',week:'一週間の振り返り'})[r.scope]}</p><h1>${esc(v.summary)}</h1><p class="subtle">保存した箇所の振り返りです。${input.partial?'最新20件の記録に限っています。':''}</p></div>
+ app.innerHTML=`${header(false)}<button id="back" class="back">← 残したもの</button><article><div class="detail-head"><p class="eyebrow">${({session:'この区切りの持ち帰り · 記録から推定',day:'一日の振り返り',week:'一週間の振り返り'})[r.scope]}</p><h1>${esc(v.summary)}</h1><p class="subtle">保存した箇所の振り返りです。${input.partial?'最新20件の記録に限っています。':''}</p></div>
  ${v.takeaways.map(t=>`<section class="detail-section"><p>${esc(t.text)}</p><p>${t.capture_ids.map(capLink).join(' · ')}</p></section>`).join('')}
  ${v.user_note?`<section class="detail-section"><h2>自分が残した一言</h2><blockquote>${esc(v.user_note.quote)}</blockquote>${capLink(v.user_note.capture_id)}</section>`:''}
  ${v.question_ids.length?`<section class="detail-section"><h2>残った問い</h2>${v.question_ids.map(id=>{const q=input.questions.find(q=>q.id===id);return `<p>${esc(q.text)}<br>${capLink(q.capture_id)}</p>`;}).join('')}</section>`:''}
@@ -131,16 +131,16 @@ function closeDialog() {
 }
 dialog.addEventListener('cancel', event => { if (uploading) event.preventDefault(); else stopRecorder(); });
 
-function getMode() { try { return localStorage.getItem('capture-mode') || 'image'; } catch { return 'image'; } }
+function getMode() { try { return localStorage.getItem('capture-mode') || 'text'; } catch { return 'image'; } }
 function setMode(mode) { try { localStorage.setItem('capture-mode', mode); } catch { /* device preferences are optional */ } }
 
 function recordDialog(target = null) {
   uploadPending = null;
-  const mode = ['image','audio','text','file','url'].includes(getMode()) ? getMode() : 'image';
+  const mode = ['image','audio','text','file','url'].includes(getMode()) ? getMode() : 'text';
   modal(target ? 'この記録に補足する' : '引っかかりを残す', `<label><span>残し方</span><select id="capture-mode" class="capture-mode">
     <option value="image">写真</option><option value="audio">音声</option>${target ? '' : '<option value="url">公開URL</option><option value="text">文章</option><option value="file">PDF・EPUB・ハイライト</option>'}</select></label>
     <div id="capture-body" class="capture-body"></div><p id="capture-error" class="error" role="alert"></p>
-    <p class="subtle">${target ? 'いま開いている記録に追加します。' : '保存したら、そのまま読書へ。読み取りは続きます。'}</p>`);
+    <p class="subtle">${target ? 'いま開いている記録に追加します。' : '思いつきも、読書の一節も。整理は自動で続きます。'}</p>`);
   $('#capture-mode').value = target && mode === 'text' ? 'image' : mode;
   const render = () => {
     stopRecorder(); setMode($('#capture-mode').value);
@@ -190,7 +190,7 @@ function recordDialog(target = null) {
       $('#capture-body').innerHTML='<input id="document-file" type="file" accept=".pdf,.epub,.json,.txt"><button id="pick-document" class="primary">ファイルを選ぶ</button><p>1ファイル10MBまで。PDF・EPUBは保存後に知見化する範囲を選べます。対応ハイライトは自動で取り込みます。</p>';
       bind('#pick-document','click',()=>$('#document-file').click());bind('#document-file','change',event=>{if(event.target.files[0])saveImport([...event.target.files]);});
     } else {
-      $('#capture-body').innerHTML = `<form id="text-form"><label><span>残したい文章・一言</span><textarea id="capture-text" maxlength="20000" placeholder="引用でも、気づきでも。" required></textarea></label><button class="primary" type="submit">残す</button></form>`;
+      $('#capture-body').innerHTML = `<form id="text-form"><label><span>残したい文章・一言</span><textarea id="capture-text" maxlength="20000" placeholder="思いついたことを、そのまま" required></textarea></label><label><span>出典（任意）</span><input id="capture-source" maxlength="2000" placeholder="空欄でも、本の名前やメディアのURLでも"></label><button class="primary" type="submit">残す</button></form>`;
       bind('#text-form', 'submit', event => { event.preventDefault(); saveUpload(null, $('#capture-text').value, target); });
     }
   };
@@ -201,7 +201,7 @@ async function saveUpload(file, text, target, reuse = null) {
   if (uploading) return;
   if (file?.size > 10 * 1024 * 1024) { $('#capture-error').textContent = 'ファイルは10MB以下にしてください。'; return; }
   uploading = true;
-  const pending = reuse || { file, text, target, key:crypto.randomUUID() };
+  const pending = reuse || { file, text, target, source:file?undefined:($('#capture-source')?.value||''), key:crypto.randomUUID() };
   uploadPending = pending;
   $('#capture-error').textContent = '保存しています。';
   dialog.querySelectorAll('button,input,textarea,select').forEach(el => { el.disabled = true; });
@@ -209,12 +209,12 @@ async function saveUpload(file, text, target, reuse = null) {
     const headers = { 'Idempotency-Key':pending.key };
     let payload;
     if (file) { payload = new FormData(); payload.set('file', file); }
-    else { headers['Content-Type'] = 'application/json'; payload = JSON.stringify({ text }); }
+    else { headers['Content-Type'] = 'application/json'; payload = JSON.stringify({ text, source:pending.source }); }
     if (target) headers['X-Capture-Version'] = String(target.version);
     await api(target ? `/api/captures/${target.id}/assets` : '/api/captures', { method:'POST', headers, body:payload });
     uploading = false; uploadPending = null; dialog.close();
     if (target) await openCapture(target.id); else await home();
-    showNotice('残しました。本の続きへ。');
+    showNotice('残しました。整理は自動で続きます。');
   } catch (error) {
     uploading = false;
     if (!dialog.open) return;
@@ -242,11 +242,11 @@ async function openCapture(captureId) {
 }
 function renderCapture() {
   const c = currentCapture, h = c.harvest, label = statusLabel({ ...c.job, error_code:c.job?.error_code });
-  const source = `${c.source_certainty === 'inferred' ? '推定 ' : ''}${esc(c.source_title || '出典未確認')}`;
+  const source = `${c.source_certainty === 'inferred' ? '推定 ' : ''}${esc(c.source_title || (c.import_origin==='user'?'自分のメモ':'出典未確認'))}`;
   const sourceLocator = c.page ? ` · ${c.locator_certainty === 'inferred' ? '推定 ' : ''}p.${esc(c.page)}` : '';
   const adopted = c.views.find(v => v.draft_key === `${c.id}:${c.version}`);
   const graph=c.graph,proposal=graph?.proposal;
-  app.innerHTML = `${header(false)}<button id="back" class="back">← 本から拾ったもの</button>
+  app.innerHTML = `${header(false)}<button id="back" class="back">← 残したもの</button>
     <article><div class="detail-head"><p class="eyebrow">${source}${c.source_inherited ? '（前回の本から引き継ぎ）' : ''}${sourceLocator} · ${date(c.created_at)}</p>
     <h1>${esc(h?.summary || '原資料を残しました。')}</h1>${label ? `<p class="status ${esc(c.job?.state)}">${esc(label)}</p>` : ''}
     ${c.pending_edit?'<p class="subtle">端末の訂正は未送信です。知見は保存先の前の版を表示しています。</p>':''}${c.from_cache?'<p class="subtle">端末に残した資料です。接続時に更新します。</p>':''}${c.local_only?`<p class="subtle">${c.local_conflict?'端末の原資料は残っています。保存状況から失敗内容を確認できます。':'端末の原資料を保存しました。接続後に自動送信・知見化します。'}</p>${c.local_error?`<p class="error">${esc(c.local_error)}</p>`:''}`:''}
@@ -266,6 +266,7 @@ function renderCapture() {
       ${c.import_ref?`<p class="subtle">${esc(c.import_ref.locator||'位置不明')} · <a href="/api/imports/${c.import_ref.job_id}/original${c.kind==='image'?`/${c.import_ref.ordinal}`:''}" download>原ファイル</a></p>`:''}
       ${c.import_origin?`<p class="subtle">取り込み由来：${({source:'引用・選択範囲',user:'本人メモ',ai:'外部AI回答・出典未検証'})[c.import_origin]}</p>`:''}
       ${c.bibliography?`<details class="fold"><summary>書誌照合 · Open Library</summary><p class="subtle">${c.bibliography.certainty==='identifier_match'?'ISBN一致（版の確定とは別）':'候補・未確定'}</p>${c.bibliography.candidates.map(b=>`<p><a href="${esc(b.url)}" target="_blank" rel="noopener noreferrer">${esc(b.title)}</a><br>${b.authors.map(esc).join(' · ')} · 初版年：${esc(b.first_publish_year||'不明')} · 版：${esc(b.edition||'不明')}</p>`).join('')||'一致する書誌なし'}</details>`:''}
+      ${/^https?:\/\//i.test(c.source_title||'')?`<p><a href="${esc(c.source_title)}" target="_blank" rel="noopener noreferrer">出典リンクを開く</a> · リンク先本文は未取得</p>`:''}
       ${c.original_text ? `<h3>最初に残した文章</h3><p class="prose">${esc(c.original_text)}</p>` : ''}
       ${h?.extracted_text ? `<h3>読み取った本文・発話</h3><p class="prose">${esc(h.extracted_text)}</p>` : ''}
       ${c.note ? `<h3>自分の一言</h3><p class="prose">${esc(c.note)}</p>` : ''}
@@ -331,7 +332,7 @@ function correctionDialog(c) {
 
 async function openView(viewId) {
   const v = await api(`/api/views/${viewId}`); currentView = v; currentCapture = null;
-  app.innerHTML = `${header(false)}<button id="back" class="back">← 本から拾ったもの</button><article>
+  app.innerHTML = `${header(false)}<button id="back" class="back">← 残したもの</button><article>
     <div class="detail-head"><p class="eyebrow">自分の見方 · 第${v.version}版</p><h1 class="prose">${esc(v.body)}</h1>${v.pending_edit?'<p class="subtle">端末の編集は未送信です。履歴は保存先の版です。</p>':''}${v.from_cache?'<p class="subtle">端末に残した見方です。接続時に更新します。</p>':''}</div>
     <section class="detail-section"><h2>この見方の根拠</h2><p>${esc(v.revisions[0].references.source_title || '残した資料')}${v.revisions[0].references.page ? ` · p.${esc(v.revisions[0].references.page)}` : ''}</p>
     ${v.evidence_issues?.some(x=>x.capture_id===v.capture_id&&x.state==='deleted')?'': '<a href="#" id="view-source">原資料と解析を読む</a>'}${v.evidence_issues?.length?'<p class="subtle">根拠の資料が訂正・削除されています。この見方の文章は維持しています。採用時の根拠は履歴に残っています。</p>':''}</section>
@@ -414,7 +415,7 @@ async function saveImport(files,reuse=null){
 }
 async function openImport(jobId){
  const job=await api(`/api/imports/${jobId}`);currentCapture=null;currentView={id:jobId,import:true};
- app.innerHTML=`${header(false)}<button id="back" class="back">← 本から拾ったもの</button><article><div class="detail-head"><p class="eyebrow">取り込み</p><h1>${esc(job.metadata.title||job.name)}</h1><p class="status">${esc(importState(job.state))}</p><p class="subtle">保存 ${job.items.filter(i=>i.capture_id).length}件 ／ 選択 ${job.items.filter(i=>i.selected).length}件 ／ 範囲 ${job.items.length}件</p></div>
+ app.innerHTML=`${header(false)}<button id="back" class="back">← 残したもの</button><article><div class="detail-head"><p class="eyebrow">取り込み</p><h1>${esc(job.metadata.title||job.name)}</h1><p class="status">${esc(importState(job.state))}</p><p class="subtle">保存 ${job.items.filter(i=>i.capture_id).length}件 ／ 選択 ${job.items.filter(i=>i.selected).length}件 ／ 範囲 ${job.items.length}件</p></div>
  ${job.metadata.warnings?.length?`<details class="fold"><summary>取得できない範囲</summary>${job.metadata.warnings.map(w=>`<p class="subtle">${esc(w)}</p>`).join('')}</details>`:''}
  ${['pdf','epub'].includes(job.format)&&job.items.length?`<form id="import-select"><p class="subtle">読んだ箇所・知見化したい範囲だけ選択します。1回20件まで、1件は知見化・横断整理・意味索引で通常3回の有料AI処理。未選択の本文はAIへ送りません。</p>${job.items.map(i=>`<details class="fold"><summary>${i.state==='deleted'?'削除済み':esc(i.locator||`範囲 ${i.ordinal}`)}${i.capture_id?' · 保存済み':''}</summary><p class="prose">${esc(i.preview||'本文取得不能')}</p>${i.state!=='deleted'&&!i.capture_id&&i.preview?`<label><input type="checkbox" name="ordinal" value="${i.ordinal}"> この範囲を取り込む</label>`:''}${i.capture_id?`<a href="#" data-import-capture="${i.capture_id}">知見と原文を読む</a>`:''}</details>`).join('')}<p id="import-error" class="error" role="alert"></p><button class="primary">選んだ範囲を残す</button></form>`:job.items.map(i=>`<div class="history"><p>${esc(i.locator||`項目 ${i.ordinal}`)} · ${esc(i.state==='saved'?'保存済み':i.state==='deleted'?'削除済み':i.state==='failed'?'失敗':'待機')}</p>${i.capture_id?`<a href="#" data-import-capture="${i.capture_id}">知見と原資料を読む</a>`:''}${i.error_code?`<p class="error">${esc(i.error_code)}</p>`:''}</div>`).join('')}
  ${job.format==='photos'?`<details class="fold"><summary>写真の順序を訂正</summary><form id="import-order"><label><span>写真番号を表示順に並べる</span><input id="import-order-list" value="${job.items.map(i=>i.ordinal).join(', ')}"></label><button class="quiet">順序を反映する</button></form></details>`:''}
@@ -435,7 +436,7 @@ async function researchDialog(context,question,period=''){
 }
 async function openResearch(runId){
  const r=await api(`/api/research/${runId}`);currentCapture=null;currentView={id:r.id,research:true};const material=id=>r.materials.find(m=>m.id===id);
- app.innerHTML=`${header(false)}<button id="back" class="back">← 本から拾ったもの</button><article><div class="detail-head"><p class="eyebrow">外部調査 · AIの検討</p><h1>${esc(r.question)}</h1><p class="status">${esc(researchState(r.state))}</p><p class="subtle">対象期間 ${esc(r.subject_period||'未指定')} · 調査AI ${r.ai_calls}/2回</p>${r.stale?'<p class="subtle">元の記録・見方が変わっています。当時の問いへの調査です。</p>':''}${r.error_code?`<p class="error">${esc(({no_verified_body:'本文を取得できませんでした。検索の断片では結論を作りません。',research_call_limit:'この調査の呼び出し上限に達しました。取得済み資料は残っています。',ai_not_configured:'AI設定後に続行します。'})[r.error_code]||r.error_code)}</p>`:''}</div>
+ app.innerHTML=`${header(false)}<button id="back" class="back">← 残したもの</button><article><div class="detail-head"><p class="eyebrow">外部調査 · AIの検討</p><h1>${esc(r.question)}</h1><p class="status">${esc(researchState(r.state))}</p><p class="subtle">対象期間 ${esc(r.subject_period||'未指定')} · 調査AI ${r.ai_calls}/2回</p>${r.stale?'<p class="subtle">元の記録・見方が変わっています。当時の問いへの調査です。</p>':''}${r.error_code?`<p class="error">${esc(({no_verified_body:'本文を取得できませんでした。検索の断片では結論を作りません。',research_call_limit:'この調査の呼び出し上限に達しました。取得済み資料は残っています。',ai_not_configured:'AI設定後に続行します。'})[r.error_code]||r.error_code)}</p>`:''}</div>
  ${r.result?`<section class="detail-section"><p>${esc(r.result.summary)}</p>${r.result.findings.map(f=>`<div class="knowledge-item"><p class="origin">${({supports:'支持する根拠',challenges:'反証する根拠',qualifies:'条件が付く',unverified:'未確認'})[f.stance]}</p><p>${esc(f.text)}</p>${f.conditions.length?`<p class="subtle">条件：${f.conditions.map(esc).join('、')}</p>`:''}<p class="subtle">出来事の日付 ${esc(f.event_at||'未確認')} · 対象期間 ${esc(f.subject_period||'未確認')}</p>${f.evidence.map(e=>`<blockquote>${esc(e.quote)}<br>${esc(material(e.material_id)?.title)}</blockquote>`).join('')}</div>`).join('')}${r.result.gaps.map(g=>`<p class="subtle">未解決：${esc(g)}</p>`).join('')}${r.result.next_reading.length?`<h2>次に読む資料</h2>${r.result.next_reading.map(n=>`<p><a href="${esc(material(n.material_id)?.url)}" target="_blank" rel="noopener noreferrer">${esc(material(n.material_id)?.title)}</a><br>${esc(n.reason)}</p>`).join('')}`:''}</section>`:''}
  <section class="detail-section"><h2>取得資料と範囲</h2>${r.materials.map(m=>`<details class="fold"><summary>${esc(m.title||m.url)} · ${esc(m.state)}</summary><p><a href="${esc(m.url)}" target="_blank" rel="noopener noreferrer">公開資料</a></p><p class="subtle">公開日 ${esc(m.published_at||'未確認')} · 取得 ${date(m.retrieved_at)} · ${esc(m.scope)}</p>${m.error_code?`<p class="error">${esc(m.error_code)}</p>`:''}${m.capture_id?`<a href="#" data-research-capture="${m.capture_id}">知見・取得本文・つながりを読む</a>`:''}<p class="prose">${esc(m.body||'本文未取得・削除済み')}</p></details>`).join('')||'<p class="subtle">取得本文を待っています。</p>'}</section>
  <details class="fold"><summary>調査の停止・再試行</summary>${['pending','running','blocked','failed'].includes(r.state)?'<button id="research-cancel" class="quiet">残りの調査を停止</button><p class="subtle">送信済みの有料処理は取り消せません。保存済みの資料は残ります。</p>':''}${['failed','partial','blocked'].includes(r.state)?'<button id="research-retry" class="quiet">未取得分を再試行</button>':''}</details></article>`;
@@ -469,3 +470,4 @@ window.addEventListener('device-cache-error',e=>showNotice(e.detail));
 window.addEventListener('device-auth-expired',()=>{closeDialog();login();showNotice('未送信の原資料は端末に残っています。もう一度開いて続けてください。');});
 window.addEventListener('device-sync',async()=>{if(!state||dialog.open||uploading)return;try{if(!currentCapture&&!currentView){state=await api(searchPath());renderFeed();}else if(currentCapture?.local_only){currentCapture=await api(`/api/captures/${currentCapture.id}`);renderCapture();}}catch(e){if(e.status!==401)showNotice(e.message);}});
 initDevice().then(()=>resume()).catch(e=>showNotice(e.message));
+

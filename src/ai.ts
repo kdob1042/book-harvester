@@ -41,7 +41,7 @@ export async function harvest(env:Env,capture:Capture,assets:Asset[],transcript:
  const inputText=capture.corrected_text??[capture.original_text,transcript].filter(Boolean).join('\n');
  const content:({type:'input_text';text:string}|{type:'input_image';image_url:string;detail:'high'})[]=[{type:'input_text',text:JSON.stringify({
   input_kind:capture.kind,has_audio:assets.some(a=>a.mime.startsWith('audio/')),original_or_corrected_text:inputText,
-  corrected_text:capture.corrected_text,audio_transcript:transcript,user_note:capture.note,previous_source_context:capture.source_title,
+  corrected_text:capture.corrected_text,audio_transcript:transcript,user_note:capture.note,previous_source_context:capture.source_title,source_locked:Boolean(capture.source_locked),
   import_origin:capture.import_origin||null,source_locator:capture.source_locator||null,
  })}];
  for(const asset of assets.filter(a=>a.mime.startsWith('image/'))){

@@ -1,7 +1,7 @@
 import {boundedBody,digest,text,fail,HttpError} from './core.ts';
 
 export const MAX_UPLOAD=10*1024*1024;
-export type Input={text:string;note:string;asset:{bytes:Uint8Array;mime:string;name:string}|null;hash:string};
+export type Input={text:string;note:string;source?:string;asset:{bytes:Uint8Array;mime:string;name:string}|null;hash:string};
 export function requestKey(request:Request) {
  const key=request.headers.get('idempotency-key');
  if(!key||!/^[a-zA-Z0-9_-]{16,100}$/.test(key)) fail(400,'保存リクエストを確認できません。'); return key;
@@ -28,7 +28,10 @@ export async function captureInput(request:Request):Promise<Input> {
   try {
    const value=JSON.parse(new TextDecoder().decode(bytes));
    const original=text(value.text).trim(); if(!original) fail(400,'残したい文章を入力してください。');
-   input={text:original,note:text(value.note||''),asset:null};
+   const source=text(value.source??'',2000).trim();
+   if(/^[a-z][a-z0-9+.-]*:/i.test(source)&&!/^https?:\/\//i.test(source))fail(400,'出典リンクはHTTPまたはHTTPSで入力してください。');
+   if(/^https?:\/\//i.test(source)){try{const url=new URL(source);if(url.username||url.password)fail(400,'認証情報を含むリンクは保存できません。');}catch(e){if(e instanceof HttpError)throw e;fail(400,'出典リンクを確認してください。');}}
+   input={text:original,note:text(value.note||''),source,asset:null};
   } catch(e) {if(e instanceof HttpError)throw e;fail(400,'文章を読み取れませんでした。');}
  } else {
   if(!type.startsWith('multipart/form-data')) fail(415,'写真・音声・文章を選んでください。');
@@ -42,7 +45,7 @@ export async function captureInput(request:Request):Promise<Input> {
   if(!detected||file.type.startsWith('image/')!==detected[0].startsWith('image/')) fail(415,'JPEG・PNG・WebP画像、または対応した音声ファイルを選んでください。');
   input={text:'',note:text(form.get('note')||''),asset:{bytes:data,mime:detected[0],name:`original.${detected[1]}`}};
  }
- const fingerprint=await digest(`${JSON.stringify({text:input.text,note:input.note,mime:input.asset?.mime})}:${input.asset?await digest(input.asset.bytes):''}`);
+ const fingerprint=await digest(`${JSON.stringify({text:input.text,note:input.note,...(input.source!==undefined?{source:input.source}:{}),mime:input.asset?.mime})}:${input.asset?await digest(input.asset.bytes):''}`);
  return {...input,hash:fingerprint};
 }
 
