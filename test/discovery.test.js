@@ -13,3 +13,19 @@ test('all history discovery is read-only; integration includes selected and reta
  const ia={discovery_id:run.id,selected_ids:['old'],idempotency_key:'integration000001'};const saved=await integrateRecords(f.env,ia,ai);assert.equal(saved.state,'completed');assert.equal(calls,2);assert.equal(f.db.prepare('SELECT count(*) n FROM theme_memberships').get().n,2);assert.equal(f.db.prepare('SELECT count(*) n FROM views').get().n,0);await integrateRecords(f.env,ia,ai);assert.equal(calls,2);assert.equal(f.db.prepare('SELECT count(*) n FROM theme_revisions').get().n,1);
 });
 test('concurrent correction rejects stale AI output and leaves no theme, membership or synthesis',async t=>{const f=await fixture();t.after(f.close);insert(f,'anchor','AI開発で検証が残る');const r=await discoverRecords(f.env,{id:'anchor',version:1,idempotency_key:'discovery00000002'},async()=>graphResponse({},{candidates:[],destination:{theme_id:null,question:'検証は何を制約する？',scope:'検証',exclusions:''}}));await assert.rejects(integrateRecords(f.env,{discovery_id:r.id,selected_ids:[],idempotency_key:'integration000002'},async(url,options)=>{f.db.prepare("UPDATE captures SET version=2 WHERE id='anchor'").run();return graphResponse({},output(JSON.parse(JSON.parse(options.body).input)));}),/更新/);assert.equal(f.db.prepare('SELECT count(*) n FROM themes').get().n,6);assert.equal(f.db.prepare('SELECT count(*) n FROM theme_revisions').get().n,0);assert.equal(f.db.prepare('SELECT count(*) n FROM theme_memberships').get().n,0);});
+test('uneven branches combine theme plus capture, preserve originals, and deepen without a new layer',async t=>{
+ const f=await fixture();t.after(f.close);insert(f,'a','検証の制約');insert(f,'b','仕事の検証');insert(f,'c','漫画の検証','creation');
+ const ai=async(url,options)=>{const p=JSON.parse(options.body),i=JSON.parse(p.input);return graphResponse({},p.text.format.name==='related_discovery_v1'?{candidates:i.candidates.map(c=>({id:c.id,reason:'検証の比較',relation:'condition',relevance:3})),destination:{theme_id:null,question:'検証の制約はどこへ移る？',scope:'検証',exclusions:''}}:output(i));};
+ const first=await discoverRecords(f.env,{id:'a',version:1,idempotency_key:'branch-discover-1'},ai);
+ const one=await integrateRecords(f.env,{discovery_id:first.id,selected_ids:['b'],idempotency_key:'branch-integrate-1'},ai);
+ const next=await discoverRecords(f.env,{id:one.theme_id,version:1,idempotency_key:'branch-discover-2'},ai);
+ assert.ok(next.candidates.some(x=>x.id==='c'));
+ const two=await integrateRecords(f.env,{discovery_id:next.id,selected_ids:['c'],mode:'parent',idempotency_key:'branch-integrate-2'},ai);
+ assert.notEqual(two.theme_id,one.theme_id);
+ const children=f.db.prepare('SELECT * FROM knowledge_inputs WHERE parent_id=?').all(two.theme_id);assert.equal(children.length,2);assert.ok(children.some(x=>x.child_id===one.theme_id&&x.child_kind==='theme'));
+ assert.equal(f.db.prepare('SELECT count(*) n FROM captures').get().n,3);
+ const third=await discoverRecords(f.env,{id:two.theme_id,version:1,idempotency_key:'branch-discover-3'},ai);
+ const deep=await integrateRecords(f.env,{discovery_id:third.id,selected_ids:[],mode:'deepen',idempotency_key:'branch-integrate-3'},ai);
+ assert.equal(deep.theme_id,two.theme_id);assert.equal(deep.version,2);
+ assert.equal(f.db.prepare('SELECT count(*) n FROM knowledge_inputs WHERE parent_revision=(SELECT revision_id FROM theme_syntheses WHERE theme_id=?)').get(two.theme_id).n,2);
+});

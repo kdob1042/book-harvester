@@ -1,0 +1,2 @@
+CREATE TABLE knowledge_inputs(parent_id TEXT NOT NULL REFERENCES themes(id),parent_revision TEXT NOT NULL REFERENCES theme_revisions(id),child_kind TEXT NOT NULL CHECK(child_kind IN ('theme','capture')),child_id TEXT NOT NULL,child_version INTEGER NOT NULL,child_revision TEXT NOT NULL DEFAULT '',PRIMARY KEY(parent_revision,child_kind,child_id));
+CREATE INDEX knowledge_inputs_child ON knowledge_inputs(child_kind,child_id);
