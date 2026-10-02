@@ -14,15 +14,15 @@ const errors = {
   subscription_reauth_required:'原資料は保存済みです。パソコンから ChatGPT に再接続してください。',
   subscription_sharing_usage_limit_exceeded:'原資料は保存済みです。サブスク枠の回復後に再試行します。',
   subscription_audio_unsupported:'音声は保存済みです。サブスク枠では文字起こしできません。文章の記録から知見化できます。',
-  ai_not_configured:'原資料は保存済みです。AI設定後に自動で読み取ります。',
-  daily_limit:'原資料は保存済みです。今日の解析上限に達しました。明日、自動で続けます。',
+  ai_not_configured:'原資料は保存済みです。AI設定を確認してから、もう一度実行してください。',
+  daily_limit:'原資料は保存済みです。今日の解析上限に達しました。明日以降に再試行してください。',
   invalid_output:'読み取り結果を確認できませんでした。原資料は残っています。',
   empty_transcript:'音声を読み取れませんでした。原音声は残っています。',
   refused:'この資料は解析できませんでした。原資料は残っています。',
   incomplete_output:'解析結果が途中で止まりました。原資料は残っています。',
   provider_rejected:'解析の設定を確認する必要があります。原資料は残っています。',
 };
-const statusLabel = c => ({ completed:'', pending:'読み取り待ち', running:'読み取り中', failed:'読み取りできませんでした', blocked:['daily_limit','subscription_sharing_usage_limit_exceeded'].includes(c.error_code) ? '保存済み・上限の回復待ち' : c.error_code==='subscription_audio_unsupported'?'保存済み・音声文字起こしは対象外':c.error_code==='subscription_reauth_required'?'保存済み・ChatGPTの再接続待ち':'保存済み・AI設定待ち', superseded:'新しい版を読み取り中' })[c.state || c.job?.state] || '';
+const statusLabel = c => ({ completed:'', pending:c.ai_authorized?'読み取り待ち':'保存済み・AI未実行', running:'読み取り中', failed:'読み取りできませんでした', blocked:['daily_limit','subscription_sharing_usage_limit_exceeded'].includes(c.error_code) ? '保存済み・上限の回復待ち' : c.error_code==='subscription_audio_unsupported'?'保存済み・音声文字起こしは対象外':c.error_code==='subscription_reauth_required'?'保存済み・ChatGPTの再接続待ち':'保存済み・AI設定待ち', superseded:c.ai_authorized?'新しい版を読み取り中':'保存済み・AI未実行' })[c.state || c.job?.state] || '';
 const bind = (selector, event, fn) => $(selector)?.addEventListener(event, fn);
 
 function showNotice(text) {
@@ -32,7 +32,7 @@ function showNotice(text) {
 const aiRequest = (path,options={}) => {
   const method=(options.method||'GET').toUpperCase();
   if(method==='GET')return false;
-  return path==='/api/captures'||/\/assets$/.test(path)||/\/retry$/.test(path)||/\/ask$/.test(path)||path==='/api/book/discover'||path==='/api/book/integrate'||/^\/api\/themes\/[^/]+\/rebuild$/.test(path)||path==='/api/research'||path==='/api/theme-changes'||path==='/api/concept-edits';
+  return /\/(extract|retry|ask)$/.test(path)||path==='/api/book/discover'||path==='/api/book/integrate'||/^\/api\/themes\/[^/]+\/rebuild$/.test(path)||path==='/api/research'||path==='/api/theme-changes'||path==='/api/concept-edits';
 };
 function syncAiActivity(){
   const indicator=$('#ai-activity');if(!indicator)return;
@@ -181,7 +181,7 @@ function recordDialog(target = null) {
   const render = () => {
     stopRecorder(); setMode($('#capture-mode').value);
     const selected = $('#capture-mode').value;
-    if(selected==='url'){ $('#capture-body').innerHTML='<form id="url-form"><label><span>公開資料のHTTPS URL</span><input id="source-url" type="url" required></label><p class="subtle">許可済みの一次資料サイトから取得します。本文の取得・知見化に通常2回のAI処理を使います。</p><p id="url-error" class="error"></p><button class="primary">残す</button></form>';bind('#url-form','submit',async e=>{e.preventDefault();try{const r=await api('/api/research',{...json('POST',{url:$('#source-url').value}),headers:{'Content-Type':'application/json','Idempotency-Key':crypto.randomUUID()}});closeDialog();if(r.local){await home();showNotice('調査依頼を端末に保存しました。接続後に開始します。');}else await openResearch(r.id);}catch(err){$('#url-error').textContent=err.message;}});return;}
+    if(selected==='url'){ $('#capture-body').innerHTML='<form id="url-form"><label><span>公開資料のHTTPS URL</span><input id="source-url" type="url" required></label><p class="subtle">許可済みの一次資料サイトから本文を取得して保存します。AI抽出は保存後に明示的に実行します。</p><p id="url-error" class="error"></p><button class="primary">残す</button></form>';bind('#url-form','submit',async e=>{e.preventDefault();try{const r=await api('/api/research',{...json('POST',{url:$('#source-url').value}),headers:{'Content-Type':'application/json','Idempotency-Key':crypto.randomUUID()}});closeDialog();if(r.local){await home();showNotice('調査依頼を端末に保存しました。接続後に開始します。');}else await openResearch(r.id);}catch(err){$('#url-error').textContent=err.message;}});return;}
     $('#capture-error').textContent = '';
     if (selected === 'image') {
       $('#capture-body').innerHTML = `<input id="image-file" type="file" accept="image/jpeg,image/png,image/webp" ${target?'':'multiple'}><button id="pick-image" class="primary">ページを撮る・選ぶ</button><p>表紙や扉の写真から、本も読み取ります。<br>JPEG・PNG・WebP、10MBまで。</p>`;
@@ -223,7 +223,7 @@ function recordDialog(target = null) {
         } catch (error) { $('#capture-error').textContent = error.name === 'NotAllowedError' ? 'マイクが使えません。音声ファイルか、写真・文章を使ってください。' : error.message; }
       });
     } else if(selected==='file'){
-      $('#capture-body').innerHTML='<input id="document-file" type="file" accept=".pdf,.epub,.json,.txt"><button id="pick-document" class="primary">ファイルを選ぶ</button><p>1ファイル10MBまで。PDF・EPUBは保存後に知見化する範囲を選べます。対応ハイライトは自動で取り込みます。</p>';
+      $('#capture-body').innerHTML='<input id="document-file" type="file" accept=".pdf,.epub,.json,.txt"><button id="pick-document" class="primary">ファイルを選ぶ</button><p>1ファイル10MBまで。PDF・EPUBは保存する範囲を選べます。AI抽出は各記録から明示的に実行します。対応ハイライトは自動で取り込みます。</p>';
       bind('#pick-document','click',()=>$('#document-file').click());bind('#document-file','change',event=>{if(event.target.files[0])saveImport([...event.target.files]);});
     } else {
       $('#capture-body').innerHTML = `<form id="text-form"><label><span>残したい文章・一言</span><textarea id="capture-text" maxlength="20000" placeholder="思いついたことを、そのまま" required></textarea></label><label><span>出典（任意）</span><input id="capture-source" maxlength="2000" placeholder="空欄でも、本の名前やメディアのURLでも"></label><button class="primary" type="submit">残す</button></form>`;
@@ -250,7 +250,7 @@ async function saveUpload(file, text, target, reuse = null) {
     await api(target ? `/api/captures/${target.id}/assets` : '/api/captures', { method:'POST', headers, body:payload });
     uploading = false; uploadPending = null; dialog.close();
     if (target) await openCapture(target.id); else await home();
-    showNotice('残しました。整理は自動で続きます。');
+    showNotice('残しました。AIはまだ実行していません。');
   } catch (error) {
     uploading = false;
     if (!dialog.open) return;
@@ -277,7 +277,7 @@ async function openCapture(captureId) {
   renderCapture();
 }
 function renderCapture() {
-  const c = currentCapture, h = c.harvest, label = statusLabel({ ...c.job, error_code:c.job?.error_code });
+  const c = currentCapture, h = c.harvest, label = statusLabel({ ...c.job, error_code:c.job?.error_code, ai_authorized:c.ai_authorized });
   const source = `${c.source_certainty === 'inferred' ? '推定 ' : ''}${esc(c.source_title || (c.import_origin==='user'?'自分のメモ':'出典未確認'))}`;
   const sourceLocator = c.page ? ` · ${c.locator_certainty === 'inferred' ? '推定 ' : ''}p.${esc(c.page)}` : '';
   const adopted = c.views.find(v => v.draft_key === `${c.id}:${c.version}`);
@@ -285,8 +285,9 @@ function renderCapture() {
   app.innerHTML = `${header(false)}<button id="back" class="back">← 残したもの</button>
     <article><div class="detail-head"><p class="eyebrow">${source}${c.source_inherited ? '（前回の本から引き継ぎ）' : ''}${sourceLocator} · ${date(c.created_at)}</p>
     <h1>${esc(h?.summary || '原資料を残しました。')}</h1>${label ? `<p class="status ${esc(c.job?.state)}">${esc(label)}</p>` : ''}
-    ${c.pending_edit?'<p class="subtle">端末の訂正は未送信です。知見は保存先の前の版を表示しています。</p>':''}${c.from_cache?'<p class="subtle">端末に残した資料です。接続時に更新します。</p>':''}${c.local_only?`<p class="subtle">${c.local_conflict?'端末の原資料は残っています。保存状況から失敗内容を確認できます。':'端末の原資料を保存しました。接続後に自動送信・知見化します。'}</p>${c.local_error?`<p class="error">${esc(c.local_error)}</p>`:''}`:''}
+    ${c.pending_edit?'<p class="subtle">端末の訂正は未送信です。知見は保存先の前の版を表示しています。</p>':''}${c.from_cache?'<p class="subtle">端末に残した資料です。接続時に更新します。</p>':''}${c.local_only?`<p class="subtle">${c.local_conflict?'端末の原資料は残っています。保存状況から失敗内容を確認できます。':'端末の原資料を保存しました。接続後に自動送信します。AI抽出は実行しません。'}</p>${c.local_error?`<p class="error">${esc(c.local_error)}</p>`:''}`:''}
     ${['failed','blocked'].includes(c.job?.state) ? `<p class="subtle">${esc(errors[c.job.error_code] || '原資料は残っています。詳細から再試行できます。')}</p>` : ''}</div>
+    ${!h&&c.job?.state==='pending'&&!c.ai_authorized?'<section class="detail-section"><button id="extract" class="primary">AIで抽出する</button><p class="subtle">このボタンを押すまでAIは実行されません。</p></section>':''}
     ${c.themes?.length?`<section class="detail-section"><p class="section-label">この記録が育てる問い</p>${c.themes.map(t=>`<a href="#" data-theme="${esc(t.id)}">${esc(t.question)}</a>`).join('<br>')}</section>`:''}
     ${h?'<section class="detail-section"><button id="find-related" class="primary">関連を探す</button><div id="related-candidates"></div></section>':''}
     ${h?'<details class="fold"><summary>周辺のつながりを読む・概念を整理する</summary><button id="open-neighborhood" class="quiet">この知見の周辺を開く</button></details>':''}
@@ -312,6 +313,7 @@ function renderCapture() {
     <details class="fold"><summary>訂正・補足など</summary><div class="secondary-links"><button id="correct">読み取り・出典を訂正</button><button id="supplement">写真・音声を補足</button>
       ${h ? '<button id="ask">この資料について聞く</button><button id="hide-revisit">再訪候補に表示しない</button>' : ''}${['failed','blocked'].includes(c.job?.state) ? '<button id="retry">読み取りを再試行</button>' : ''}<button id="delete" class="danger">この記録を削除</button></div></details></article>`;
   wireHeader(); wireThemeLinks(); bind('#back', 'click', () => home().catch(e => showNotice(e.message)));
+  bind('#extract','click',async event=>{event.target.disabled=true;try{await api(`/api/captures/${c.id}/extract`,json('POST',{version:c.version}));await openCapture(c.id);showNotice('AI抽出を開始しました。');}catch(e){showNotice(e.message);event.target.disabled=false;}});
   bind('#find-related','click',async event=>{event.target.disabled=true;try{const r=await api('/api/book/discover',json('POST',{id:c.id,version:c.version,idempotency_key:crypto.randomUUID()}));showRelated(r,c);}catch(e){showNotice(e.message);}finally{event.target.disabled=false;}});
   if(h)api(`/api/book/discovery?anchor=${encodeURIComponent(c.id)}`).then(r=>{if(currentCapture?.id===c.id&&r)showRelated(r,c);}).catch(()=>{});
   bind('#adopt', 'click', async event => {
@@ -365,7 +367,7 @@ function correctionDialog(c) {
     event.preventDefault(); const button = event.target.querySelector('button'); button.disabled = true;
     try {
       await api(`/api/captures/${c.id}`, json('PATCH', { version:c.version, corrected_text:$('#corrected-text').value || null, note:$('#note').value, source_title:$('#source-title').value, page:$('#page-number').value }));
-      closeDialog(); await openCapture(c.id); showNotice('訂正を残しました。もう一度読み取ります。');
+      closeDialog(); await openCapture(c.id); showNotice('訂正を残しました。AIはまだ実行していません。');
     } catch (e) { $('#correction-error').textContent = e.message; button.disabled = false; }
   });
 }
@@ -412,10 +414,10 @@ function notifyReflection(reflections){
 }
 function privacyDialog() {
   modal('AIと保存について', `<div class="privacy"><p>残した写真・音声・文章は、このアプリの非公開データとして保存します。</p>
-    <p>解析には、対象の原資料、自分の一言、前回の書名だけをOpenAIへ送ります。横断接続には、過去の関連候補を最大12記録・120ノードと、現行の見方を最大6件送ります。通常保存は読み取りまでです。関連探索とテーマの理解の更新は、ボタンで依頼した時だけ実行します。</p>
+    <p>写真・音声・文章を保存しただけではOpenAIへ送りません。「AIで抽出する」などAI実行が明示された操作のときだけ送信します。横断接続には、過去の関連候補を最大12記録・120ノードと、現行の見方を最大6件送ります。</p>
     <p>AIが作るのは知見と見方の案です。「自分の見方にする」を選んだ文章だけが、本人の見方として残ります。</p>
     <p class="subtle">${state?.ai_configured ? 'AI解析は設定済みです。' : 'AI解析は未設定です。原資料を保存して待ちます。'}<br>今日の呼び出し ${state?.usage.calls || 0} / ${state?.daily_limit || '—'}（UTC日次）。写真・文章は読み取りと横断整理で通常2回、${state?.ai?.mode==='chatgpt'?'音声は原資料の保存のみ。':'音声は文字起こしを含めて通常3回。'}<br>${state?.ai?.mode==='chatgpt' ? 'AI解析は ChatGPT のサブスク枠のみを使います。有料APIへの自動切り替えはありません。音声文字起こしと意味索引は使わず、検索は語句検索です。接続状態：'+esc(state.ai.state)+ '。' : '解析と意味索引は有料APIを使います。上限は呼び出し数です。'}</p>
-    <p class="subtle">保存した記録と採用履歴から、区切り・日・週の振り返りを自動で整理します。最大20記録・10改訂をAI処理へ送ります。</p>
+    <p class="subtle">区切り・日・週の振り返りは自動生成しません。AI処理は明示的な操作に限定します。</p>
     ${state?.ai?.mode==='chatgpt'?'<p>ChatGPT の接続はパソコンから設定できます。上限や接続切れの間は原資料を保存して待ちます。</p><button id="chatgpt-disconnect" class="quiet danger">ChatGPT 接続を解除</button>':''}<details class="fold"><summary>振り返りの通知</summary><p class="subtle">このアプリを開いている間の通知です。既定はオフ。本文が端末の通知に表示されます。</p><label><input id="reflection-notifications" type="checkbox"> 通知を使う</label><p id="notification-error" class="error" role="alert"></p></details>
     <details class="fold"><summary>端末の保存とオフライン</summary><p>最近20記録・10件の見方と、取得できた原資料を自動で端末に残します。読書キャッシュは最大20MB、未送信の原資料は別枠で最大50MBです。端末側の保存領域が削除されると未送信データを失うため、接続時の同期または書き出しで残せます。</p><label><span>最近の記録を残す件数</span><select id="device-record-count"><option>5</option><option selected>20</option><option>50</option></select></label><label><span>読書キャッシュの容量（MB）</span><select id="device-cache-mb"><option>5</option><option selected>20</option><option>40</option></select></label><label><span>未送信原資料の容量（MB）</span><select id="device-outbox-mb"><option>20</option><option selected>50</option></select></label><p class="subtle">設定を減らしても、未送信の原資料は自動で削除しません。</p><button id="device-status" class="quiet">未送信・競合を見る</button><button id="device-clear-cache" class="quiet">読書キャッシュだけ削除</button><button id="device-export" class="quiet">未送信の原資料を書き出す</button><button id="device-discard" class="quiet danger">未送信の原資料をすべて削除</button><p id="device-error" class="error"></p></details><p class="subtle">削除は記録の詳細から。書き出しには元ファイルと履歴も含みます。</p></div>`);
   bind('#chatgpt-disconnect','click',async()=>{try{await api('/api/ai/disconnect',{method:'POST'});state.ai.state='disconnected';state.ai_configured=false;closeDialog();showNotice('ChatGPT 接続を解除しました。');}catch(e){showNotice(e.message);}});
@@ -480,7 +482,7 @@ async function openImport(jobId){
  const job=await api(`/api/imports/${jobId}`);currentCapture=null;currentView={id:jobId,import:true};
  app.innerHTML=`${header(false)}<button id="back" class="back">← 残したもの</button><article><div class="detail-head"><p class="eyebrow">取り込み</p><h1>${esc(job.metadata.title||job.name)}</h1><p class="status">${esc(importState(job.state))}</p><p class="subtle">保存 ${job.items.filter(i=>i.capture_id).length}件 ／ 選択 ${job.items.filter(i=>i.selected).length}件 ／ 範囲 ${job.items.length}件</p></div>
  ${job.metadata.warnings?.length?`<details class="fold"><summary>取得できない範囲</summary>${job.metadata.warnings.map(w=>`<p class="subtle">${esc(w)}</p>`).join('')}</details>`:''}
- ${['pdf','epub'].includes(job.format)&&job.items.length?`<form id="import-select"><p class="subtle">読んだ箇所・知見化したい範囲だけ選択します。1回20件まで、1件は知見化・横断整理で通常2回のAI処理。未選択の本文はAIへ送りません。</p>${job.items.map(i=>`<details class="fold"><summary>${i.state==='deleted'?'削除済み':esc(i.locator||`範囲 ${i.ordinal}`)}${i.capture_id?' · 保存済み':''}</summary><p class="prose">${esc(i.preview||'本文取得不能')}</p>${i.state!=='deleted'&&!i.capture_id&&i.preview?`<label><input type="checkbox" name="ordinal" value="${i.ordinal}"> この範囲を取り込む</label>`:''}${i.capture_id?`<a href="#" data-import-capture="${i.capture_id}">知見と原文を読む</a>`:''}</details>`).join('')}<p id="import-error" class="error" role="alert"></p><button class="primary">選んだ範囲を残す</button></form>`:job.items.map(i=>`<div class="history"><p>${esc(i.locator||`項目 ${i.ordinal}`)} · ${esc(i.state==='saved'?'保存済み':i.state==='deleted'?'削除済み':i.state==='failed'?'失敗':'待機')}</p>${i.capture_id?`<a href="#" data-import-capture="${i.capture_id}">知見と原資料を読む</a>`:''}${i.error_code?`<p class="error">${esc(i.error_code)}</p>`:''}</div>`).join('')}
+ ${['pdf','epub'].includes(job.format)&&job.items.length?`<form id="import-select"><p class="subtle">保存したい範囲だけ選択します。1回20件まで。選択しただけではAIを実行せず、各記録から「AIで抽出する」を押した場合だけ送信します。</p>${job.items.map(i=>`<details class="fold"><summary>${i.state==='deleted'?'削除済み':esc(i.locator||`範囲 ${i.ordinal}`)}${i.capture_id?' · 保存済み':''}</summary><p class="prose">${esc(i.preview||'本文取得不能')}</p>${i.state!=='deleted'&&!i.capture_id&&i.preview?`<label><input type="checkbox" name="ordinal" value="${i.ordinal}"> この範囲を取り込む</label>`:''}${i.capture_id?`<a href="#" data-import-capture="${i.capture_id}">知見と原文を読む</a>`:''}</details>`).join('')}<p id="import-error" class="error" role="alert"></p><button class="primary">選んだ範囲を残す</button></form>`:job.items.map(i=>`<div class="history"><p>${esc(i.locator||`項目 ${i.ordinal}`)} · ${esc(i.state==='saved'?'保存済み':i.state==='deleted'?'削除済み':i.state==='failed'?'失敗':'待機')}</p>${i.capture_id?`<a href="#" data-import-capture="${i.capture_id}">知見と原資料を読む</a>`:''}${i.error_code?`<p class="error">${esc(i.error_code)}</p>`:''}</div>`).join('')}
  ${job.format==='photos'?`<details class="fold"><summary>写真の順序を訂正</summary><form id="import-order"><label><span>写真番号を表示順に並べる</span><input id="import-order-list" value="${job.items.map(i=>i.ordinal).join(', ')}"></label><button class="quiet">順序を反映する</button></form></details>`:''}
  <details class="fold"><summary>原ファイル・再試行・削除</summary>${job.format!=='photos'?`<p><a href="/api/imports/${job.id}/original" download>原ファイルを保存</a></p>`:''}${['failed','partial'].includes(job.state)?'<button id="import-retry" class="quiet">失敗分を再試行</button>':''}<button id="import-delete" class="quiet danger">取り込みと関連記録を削除</button></details></article>`;
  wireHeader();bind('#back','click',()=>home().catch(e=>showNotice(e.message)));document.querySelectorAll('[data-import-capture]').forEach(el=>el.onclick=event=>{event.preventDefault();openCapture(el.dataset.importCapture).catch(e=>showNotice(e.message));});
@@ -494,7 +496,7 @@ async function openImport(jobId){
 const researchState=s=>({pending:'調査待ち',running:'公開本文を調査中',completed:'調査済み',partial:'一部取得できませんでした',blocked:'AI設定・利用枠待ち',failed:'調査を完了できませんでした',canceled:'停止済み',superseded:'元の問い・資料が更新されました'})[s]||s;
 async function researchDialog(context,question,period=''){
  const {hosts}=await api('/api/research/hosts'),key=crypto.randomUUID();
- modal('外部資料を調べる',`<form id="research-form"><label><span>外へ送る問い（この文章だけ）</span><textarea id="research-question" maxlength="1000" required>${esc(question)}</textarea></label><label><span>対象期間（任意・問いと一緒に送信）</span><input id="research-period" maxlength="100" value="${esc(period)}"></label><p class="subtle">本人メモや本の全本文は送信しません。検索1回・比較1回までのAI処理、本文は最大3件。保存した資料には通常2回ずつの知見化処理と、後続の振り返り処理が追加されます。日次利用枠も適用します。</p><details class="fold"><summary>取得できる公開資料サイト</summary><p class="prose">${hosts.map(esc).join('、')}</p></details><p id="research-error" class="error" role="alert"></p><button class="primary">この問いを調べる</button></form>`);
+ modal('外部資料を調べる',`<form id="research-form"><label><span>外へ送る問い（この文章だけ）</span><textarea id="research-question" maxlength="1000" required>${esc(question)}</textarea></label><label><span>対象期間（任意・問いと一緒に送信）</span><input id="research-period" maxlength="100" value="${esc(period)}"></label><p class="subtle">本人メモや本の全本文は送信しません。このボタンで検索1回・比較1回までのAI処理を明示的に開始します。取得した資料の追加AI抽出や振り返りは自動実行しません。日次利用枠も適用します。</p><details class="fold"><summary>取得できる公開資料サイト</summary><p class="prose">${hosts.map(esc).join('、')}</p></details><p id="research-error" class="error" role="alert"></p><button class="primary">この問いを調べる</button></form>`);
  bind('#research-form','submit',async e=>{e.preventDefault();e.submitter.disabled=true;try{const r=await api('/api/research',{...json('POST',{...context,question:$('#research-question').value,subject_period:$('#research-period').value}),headers:{'Content-Type':'application/json','Idempotency-Key':key}});closeDialog();if(r.local){await home();showNotice('調査依頼を端末に保存しました。接続後に開始します。');}else await openResearch(r.id);}catch(err){$('#research-error').textContent=err.message;e.submitter.disabled=false;}});
 }
 async function openResearch(runId){
