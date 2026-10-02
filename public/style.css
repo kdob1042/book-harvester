@@ -152,3 +152,11 @@ dialog:has(#drilldown-panel) { width:min(820px,calc(100% - 28px)); }
 .knowledge-branch{margin:24px 0 0 18px;border-left:2px solid var(--line,#ddd);padding-left:18px}.knowledge-branch .capture-row{position:relative}.knowledge-branch .capture-row:before{content:"";position:absolute;left:-18px;top:50%;width:18px;border-top:2px solid var(--line,#ddd)}
 
 .question-roots,.question-branches{list-style:none;margin:0;padding:0}.question-roots>li{margin-bottom:1.5rem}.question-branches{margin-left:.5rem;padding-left:.75rem;border-left:1px solid var(--line,#ddd)}.question-branches .theme-row{padding:12px 0}.question-branches h2{font-size:1rem}.theme-home .theme-row h2{margin:0}.theme-home{margin-top:1.5rem}
+
+.ai-confirmation{width:min(420px,calc(100vw - 32px));box-sizing:border-box;border:0;border-radius:20px;padding:24px;box-shadow:0 20px 70px #0004;max-height:calc(100dvh - 32px)}
+.ai-confirmation::backdrop{background:rgba(0,0,0,.4)}
+.ai-confirmation h2{margin:0 0 12px;font-size:22px}
+.ai-confirmation-actions{display:flex;gap:12px;align-items:stretch;margin-top:24px}
+.ai-confirmation-actions button{min-height:56px;font-size:18px;border-radius:14px}
+.ai-confirmation-actions [data-no]{flex:1}
+.ai-confirmation-actions [data-yes]{flex:2;font-weight:700}
