@@ -22,7 +22,7 @@ export async function call(env:Env,captureId:string|null,endpoint:string,model:s
  try {
   const multipart=payload instanceof FormData;
   const response=await fetcher(`https://api.openai.com/v1/${endpoint}`,{
-   method:'POST',signal:AbortSignal.timeout(90000),headers:{Authorization:`Bearer ${session?.access_token||env.OPENAI_API_KEY}`,...(multipart?{}:{'Content-Type':'application/json'})},
+   method:'POST',signal:AbortSignal.timeout(90000),headers:{Authorization:`Bearer ${session?.access_token||env.OPENAI_API_KEY}`,...(session?{Accept:'text/event-stream'}:{}),...(multipart?{}:{'Content-Type':'application/json'})},
    body:multipart?payload as FormData:JSON.stringify(payload),
   });
   if(!session&&!response.ok){await response.body?.cancel();throw new AiError(response.status===429?'rate_limit':response.status>=500?'provider_unavailable':'provider_rejected',response.status===429||response.status>=500);}
