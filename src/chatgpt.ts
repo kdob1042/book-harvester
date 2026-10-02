@@ -59,6 +59,21 @@ export async function completedResponse(response:Response):Promise<any>{
  // A provider can return a completed JSON response even when stream was requested.
  // Accept only an explicit completed Responses object, never partial output or an error.
  const contentType=response.headers.get('content-type')||'';
+ if(!contentType&&response.body&&!response.redirected){
+  // Some subscription responses omit Content-Type. Detect only JSON or SSE;
+  // never accept HTML/login pages, partial responses, or arbitrary text.
+  const reader=response.body.getReader();let prefix='',bytes=0;const parts:Uint8Array[]=[];const decoder=new TextDecoder();
+  try{while(!prefix.trim()||['data:','event:'].some(token=>token.startsWith(prefix.trimStart())&&prefix.trimStart().length<token.length)){
+   const item=await reader.read();if(item.done)throw new SubscriptionError('subscription_invalid_stream');
+   bytes+=item.value.length;if(bytes>8*1024*1024)throw new SubscriptionError('subscription_stream_too_large');
+   parts.push(item.value);prefix+=decoder.decode(item.value,{stream:true});
+  }
+  const start=prefix.trimStart();const type=start.startsWith('{')?'application/json':/^(data:|event:|:)/.test(start)?'text/event-stream':null;
+  if(!type)throw new SubscriptionError('subscription_invalid_stream');
+  const body=new ReadableStream<Uint8Array>({start(controller){for(const part of parts)controller.enqueue(part);},async pull(controller){try{const item=await reader.read();if(item.done){reader.releaseLock();controller.close();}else controller.enqueue(item.value);}catch(e){controller.error(e);}},async cancel(){await reader.cancel();reader.releaseLock();}});
+  return await completedResponse(new Response(body,{headers:{'Content-Type':type}}));
+  }catch(e){await reader.cancel().catch(()=>{});try{reader.releaseLock();}catch{}throw e;}
+ }
  if(contentType.includes('application/json')){
   if(!response.body)throw new SubscriptionError('subscription_invalid_stream');
   const reader=response.body.getReader();let bytes=0,parts:Uint8Array[]=[];
