@@ -8,7 +8,7 @@ const $ = selector => document.querySelector(selector);
 let state, currentCapture = null, currentView = null, query = '', recorder = null, stream = null, uploading = false, uploadPending = null;
 let searchFilters={source:'',year:'',origin:''};
 const searchPath=()=>`/api/state?q=${encodeURIComponent(query)}&source=${encodeURIComponent(searchFilters.source)}&year=${encodeURIComponent(searchFilters.year)}&origin=${encodeURIComponent(searchFilters.origin)}`;
-let noticeTimer, searchTimer, pollBusy = false;
+let noticeTimer, searchTimer, pollBusy = false, authMethod = null, reauthenticating = false;
 const errors = {
   subscription_reauth_required:'原資料は保存済みです。パソコンから ChatGPT に再接続してください。',
   subscription_sharing_usage_limit_exceeded:'原資料は保存済みです。サブスク枠の回復後に再試行します。',
@@ -28,12 +28,19 @@ function showNotice(text) {
   clearTimeout(noticeTimer); notice.textContent = text;
   noticeTimer = setTimeout(() => { notice.textContent = ''; }, 4500);
 }
-async function api(path,options={}){try{return await deviceRequest(path,options);}catch(error){if(error.status===401&&path!=='/api/login'){closeDialog();login();}throw error;}}
+async function api(path,options={}){try{return await deviceRequest(path,options);}catch(error){if([401,403].includes(error.status)&&path!=='/api/login'){closeDialog();login();}throw error;}}
 
 const json = (method, data) => ({ method, headers:{ 'Content-Type':'application/json' }, body:JSON.stringify(data) });
 
 function login() {
-  if(state?.auth_method==='cloudflare_access'){location.assign('/cdn-cgi/access/logout');return;}
+  const method=authMethod||state?.auth_method;
+  if(method!=='password'){
+    if(reauthenticating)return;
+    reauthenticating=true;
+    app.innerHTML='<p class="loading">もう一度ログインして続けてください。未送信の記録は端末に残っています。</p>';
+    app.removeAttribute('aria-busy');
+    location.assign('/cdn-cgi/access/logout');return;
+  }
   currentCapture = null; currentView = null; state = null;
   app.innerHTML = `<div class="login"><p class="eyebrow">BOOK HARVESTER</p><h1>読書の続きを、ここから。</h1>
     <form id="login-form"><label><span>パスワード</span><input id="password" type="password" required autocomplete="current-password"></label>
@@ -73,6 +80,7 @@ function wireHeader() {
 
 async function home() {
   const next = await api(searchPath());
+  authMethod = next.auth_method;
   state = next; currentCapture = null; currentView = null;
   app.innerHTML = `${header()}<section class="intro"><p class="eyebrow">READ · LEAVE · THINK</p>
     <h1>理解を育てる。</h1><p>${state.current_source ? `${esc(state.current_source.title)}<br>前回の本を引き継ぎます。表紙を残すと、本も切り替わります。` : '本の一節も、自分の気づきも。<br>記録から、同じ問いの理解が育ちます。'}</p></section><section id="feed"></section>`;
@@ -414,7 +422,21 @@ setInterval(async () => {
   finally { pollBusy = false; }
 }, 2500);
 
-home().catch(error => { if (error.status !== 401) { app.innerHTML = '<p class="loading">接続を確認して、ページを開き直してください。</p>'; } });
+async function start(){
+  try{
+    const response=await fetch('/api/auth-config',{credentials:'same-origin',cache:'no-store'});
+    if(response.redirected||[401,403].includes(response.status)){login();return;}
+    if(!response.ok)throw Error('Authentication configuration unavailable');
+    const config=await response.json();
+    if(!['password','cloudflare_access'].includes(config.auth_method))throw Error('Unknown authentication mode');
+    authMethod=config.auth_method;
+  }catch(error){
+    // An offline reading cache can still open; unknown mode never renders a password form.
+    if(navigator.onLine)throw error;
+  }
+  await home();
+}
+start().catch(error => { if (![401,403].includes(error.status)) { app.innerHTML = '<p class="loading">接続を確認して、ページを開き直してください。</p>'; } });
 
 const importState=value=>({pending:'保存済み・取り込み待ち',running:'取り込み中',ready:'範囲を選択できます',completed:'取り込み済み',partial:'一部失敗・成功分は保存済み',failed:'取り込みできませんでした'})[value]||value;
 async function saveImport(files,reuse=null){
