@@ -56,7 +56,20 @@ export function subscriptionPayload(payload:Record<string,unknown>,model:string)
 function streamError(event:any){const code=event.error?.code||event.response?.error?.code||event.code;return new SubscriptionError(['subscription_sharing_usage_limit_exceeded','subscription_sharing_usage_unavailable'].includes(code)?code:'subscription_response_failed',code==='subscription_sharing_usage_unavailable');}
 export async function completedResponse(response:Response):Promise<any>{
  if(!response.ok){let data:any;try{data=await response.json();}catch{}if(response.status===401)throw new SubscriptionError('subscription_reauth_required');if(data?.error?.code)throw streamError(data);throw new SubscriptionError(response.status===429?'subscription_sharing_usage_limit_exceeded':'subscription_provider_rejected',response.status>=500);}
- if(!response.headers.get('content-type')?.includes('text/event-stream')||!response.body)throw new SubscriptionError('subscription_invalid_stream');
+ // A provider can return a completed JSON response even when stream was requested.
+ // Accept only an explicit completed Responses object, never partial output or an error.
+ const contentType=response.headers.get('content-type')||'';
+ if(contentType.includes('application/json')){
+  if(!response.body)throw new SubscriptionError('subscription_invalid_stream');
+  const reader=response.body.getReader();let bytes=0,parts:Uint8Array[]=[];
+  try{for(;;){const item=await reader.read();if(item.done)break;bytes+=item.value.length;if(bytes>8*1024*1024)throw new SubscriptionError('subscription_stream_too_large');parts.push(item.value);}}
+  finally{await reader.cancel().catch(()=>{});reader.releaseLock();}
+  let data:any;try{data=JSON.parse(Buffer.concat(parts).toString('utf8'));}catch{throw new SubscriptionError('subscription_invalid_json');}
+  if(data.error||data.status==='failed'||data.status==='incomplete')throw streamError(data);
+  if(data.object==='response'&&data.status==='completed'&&Array.isArray(data.output))return data;
+  throw new SubscriptionError('subscription_uncompleted_json');
+ }
+ if(!contentType.includes('text/event-stream')||!response.body)throw new SubscriptionError('subscription_invalid_stream');
  const reader=response.body.getReader(),decoder=new TextDecoder();let buffer='',bytes=0;
  try{for(;;){const {value,done}=await reader.read();if(done)break;bytes+=value.length;if(bytes>8*1024*1024)throw new SubscriptionError('subscription_stream_too_large');buffer+=decoder.decode(value,{stream:true});buffer=buffer.replace(/\r\n/g,'\n');
   let end;while((end=buffer.indexOf('\n\n'))>=0){const frame=buffer.slice(0,end);buffer=buffer.slice(end+2);const raw=frame.split('\n').filter(x=>x.startsWith('data:')).map(x=>x.slice(5).trimStart()).join('\n');if(!raw||raw==='[DONE]')continue;let event;try{event=JSON.parse(raw);}catch{throw new SubscriptionError('subscription_invalid_stream');}
