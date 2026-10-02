@@ -5,7 +5,7 @@ import {startResearch,readResearch,cancelResearch,retryResearch} from './researc
 import {allowedHosts} from './external.ts';
 import {Buffer} from 'node:buffer';
 import {HttpError,fail,text,version,jsonBody,stmt,rows,getCapture,jobStatement,revisionStatement,id,now,type Capture,type Harvest,type Asset,type View,type QueueBody} from './core.ts';
-import {loggedIn,login,logout} from './auth.ts';
+import {loggedIn,login,logout,accessAuthorized} from './auth.ts';
 import {captureInput,requestKey,stageAsset,type Input} from './input.ts';
 import {dispatch,cleanup,consume} from './queue.ts';
 import {storeCapture} from './capture-storage.ts';
@@ -217,17 +217,19 @@ function exportData(env:Env){
 
 async function route(request:Request,env:Env,ctx:ExecutionContext){
  const url=new URL(request.url),path=url.pathname,method=request.method;
+ if(env.ACCESS_AUD&&!await accessAuthorized(env,ctx))fail(403,'Cloudflareで本人のアカウントにログインしてください。');
  if(!['GET','HEAD'].includes(method)&&request.headers.get('origin')!==env.APP_ORIGIN)fail(403,'この画面から操作し直してください。');
  if(path==='/healthz'&&method==='GET')return json({ok:true});
  if(path==='/api/login'&&method==='POST'){
+  if(env.ACCESS_AUD)return json({ok:true});
   const result=await login(request,env,(await jsonBody(request.clone())).password);
   return json(result.status===200?{ok:true}:{error:result.error},result.status,result.cookie?{'Set-Cookie':result.cookie}:{});
  }
  if(!path.startsWith('/api/'))return env.ASSETS.fetch(request);
- if(!await loggedIn(request,env))fail(401,'ログインしてください。');
+ if(!env.ACCESS_AUD&&!await loggedIn(request,env))fail(401,'ログインしてください。');
  const replay=await replayReceipt(env,request);if(replay)return json(replay);
  if(path==='/api/sync'&&method==='GET')return json(await syncDelta(env,url.searchParams.get('cursor')));
- if(path==='/api/logout'&&method==='POST')return json({ok:true},200,{'Set-Cookie':await logout(request,env)});
+ if(path==='/api/logout'&&method==='POST')return json({ok:true,...(env.ACCESS_AUD?{redirect:'/cdn-cgi/access/logout'}:{})},200,{'Set-Cookie':await logout(request,env)});
  if(path==='/api/state'&&method==='GET'){
   const day=new Date().toISOString().slice(0,10),search=(url.searchParams.get('q')||'').slice(0,200),semantic=await semanticSearch(env,search),filters={source:(url.searchParams.get('source')||'').slice(0,200),year:/^\d{4}$/.test(url.searchParams.get('year')||'')?url.searchParams.get('year')!:'',origin:['source','user','ai'].includes(url.searchParams.get('origin')||'')?url.searchParams.get('origin')!:''};
   const [captures,views,current,usage,reflections,revisits,imports]=await Promise.all([
@@ -237,7 +239,7 @@ async function route(request:Request,env:Env,ctx:ExecutionContext){
    listReflections(env),readRevisit(env),
    rows(env,'SELECT id,name,format,state,error_code FROM import_jobs ORDER BY created_at DESC LIMIT 10'),
   ]);
-  return json({scope:await ownerScope(env),ai_configured:Boolean(env.OPENAI_API_KEY),captures:search?captures.sort((a,b)=>(semantic.matches.find(x=>x.capture_id===b.id)?.score||0)-(semantic.matches.find(x=>x.capture_id===a.id)?.score||0)):captures,filter_active:Boolean(filters.source||filters.year||filters.origin),search_state:semantic.state,semantic_matches:semantic.matches,views,reflections,revisits,imports,research:await rows(env,'SELECT id,question,state FROM research_runs ORDER BY created_at DESC LIMIT 10'),current_source:current,usage:{calls:usage?.calls||0},daily_limit:Number(env.AI_DAILY_CALL_LIMIT)});
+  return json({scope:await ownerScope(env),auth_method:env.ACCESS_AUD?'cloudflare_access':'password',ai_configured:Boolean(env.OPENAI_API_KEY),captures:search?captures.sort((a,b)=>(semantic.matches.find(x=>x.capture_id===b.id)?.score||0)-(semantic.matches.find(x=>x.capture_id===a.id)?.score||0)):captures,filter_active:Boolean(filters.source||filters.year||filters.origin),search_state:semantic.state,semantic_matches:semantic.matches,views,reflections,revisits,imports,research:await rows(env,'SELECT id,question,state FROM research_runs ORDER BY created_at DESC LIMIT 10'),current_source:current,usage:{calls:usage?.calls||0},daily_limit:Number(env.AI_DAILY_CALL_LIMIT)});
  }
  if(path==='/api/captures'&&method==='POST'){
   const saved=await saveCapture(request,env);ctx.waitUntil(dispatch(env));return saved;

@@ -30,6 +30,7 @@ async function api(path,options={}){try{return await deviceRequest(path,options)
 const json = (method, data) => ({ method, headers:{ 'Content-Type':'application/json' }, body:JSON.stringify(data) });
 
 function login() {
+  if(state?.auth_method==='cloudflare_access'){location.assign('/cdn-cgi/access/logout');return;}
   currentCapture = null; currentView = null; state = null;
   app.innerHTML = `<div class="login"><p class="eyebrow">BOOK HARVESTER</p><h1>読書の続きを、ここから。</h1>
     <form id="login-form"><label><span>パスワード</span><input id="password" type="password" required autocomplete="current-password"></label>
@@ -64,7 +65,7 @@ function wireHeader() {
   if($('#search-origin'))$('#search-origin').value=searchFilters.origin;for(const key of ['source','year','origin'])bind(`#search-${key}`,'input',event=>{searchFilters[key]=event.target.value;clearTimeout(searchTimer);searchTimer=setTimeout(async()=>{try{state=await api(searchPath());renderFeed();}catch(e){showNotice(e.message);}},400);});
   bind('#privacy', 'click', privacyDialog);
   bind('#device-menu','click',devicePendingDialog);
-  bind('#logout', 'click', async () => { try { await api('/api/logout', json('POST', {})); login(); } catch (e) { showNotice(e.message); } });
+  bind('#logout', 'click', async () => { try { const result=await api('/api/logout', json('POST', {})); await lockDevice();if(result.redirect){location.assign(result.redirect);return;}login(); } catch (e) { showNotice(e.message); } });
 }
 
 async function home() {

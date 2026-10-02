@@ -72,7 +72,9 @@
         "AI_DAILY_CALL_LIMIT": "60",
         "AI_MAX_OUTPUT_TOKENS": "4000",
         "RESEARCH_ALLOWED_HOSTS": "",
-        "OPENAI_RESEARCH_MODEL": "gpt-4.1-mini"
+        "OPENAI_RESEARCH_MODEL": "gpt-4.1-mini",
+        "ACCESS_AUD": "aa6602f20c3014cfb9798f3060bc633469e2fd3bf4227fdd838a4bece437d39c",
+        "ACCESS_EMAIL": "kdob1042@gmail.com"
       },
       "d1_databases": [
         {

@@ -1,6 +1,12 @@
 import { timingSafeEqual } from 'node:crypto';
 import { digest,stmt,now } from './core.ts';
 
+export async function accessAuthorized(env:Env,ctx:ExecutionContext) {
+ if(!env.ACCESS_AUD||!env.ACCESS_EMAIL||ctx.access?.aud!==env.ACCESS_AUD)return false;
+ try {const identity=await ctx.access.getIdentity();return identity?.email?.toLowerCase()===env.ACCESS_EMAIL.toLowerCase();}catch{return false;}
+}
+export const credentialGeneration=(env:Env)=>env.ACCESS_AUD?`access:${env.ACCESS_AUD}:${env.ACCESS_EMAIL?.toLowerCase()}`:env.APP_PASSWORD;
+
 export async function loggedIn(request:Request,env:Env) {
  const token=/(?:^|;\s*)bh_session=([a-f0-9]{64})(?:;|$)/.exec(request.headers.get('cookie')||'')?.[1];
  return token ? Boolean(await stmt(env,'SELECT hash FROM sessions WHERE hash=? AND expires>? AND generation=?',await digest(token),now(),await digest(env.APP_PASSWORD)).first()) : false;
