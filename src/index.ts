@@ -223,6 +223,8 @@ function exportData(env:Env){
 
 export async function route(request:Request,env:Env,ctx:ExecutionContext,trustedService=false):Promise<Response>{
  const url=new URL(request.url),path=url.pathname,method=request.method;
+ // Public bootstrap contains only the UI authentication mode, never identity or records.
+ if(path==='/api/auth-config'&&method==='GET')return json({auth_method:env.ACCESS_AUD?'cloudflare_access':'password'},200,{'Cache-Control':'no-store'});
  if(!trustedService&&env.ACCESS_AUD&&!await accessAuthorized(env,ctx,request))fail(403,'Cloudflareで本人のアカウントにログインしてください。');
  if(!['GET','HEAD'].includes(method)&&request.headers.get('origin')!==env.APP_ORIGIN)fail(403,'この画面から操作し直してください。');
  if(path==='/healthz'&&method==='GET')return json({ok:true});

@@ -14,7 +14,7 @@
     "types": "wrangler types --include-runtime false --strict-vars false",
     "migrate": "wrangler d1 migrations apply DB --local",
     "deploy": "node scripts/deploy.mjs",
-    "test:browser": "node scripts/browser-smoke.mjs && node scripts/expansion-smoke.mjs && node scripts/ideas-smoke.mjs && node scripts/theme-browser-smoke.mjs && node scripts/discovery-browser-smoke.mjs && node scripts/explicit-browser-smoke.mjs",
+    "test:browser": "node scripts/auth-browser-smoke.mjs && node scripts/browser-smoke.mjs && node scripts/expansion-smoke.mjs && node scripts/ideas-smoke.mjs && node scripts/theme-browser-smoke.mjs && node scripts/discovery-browser-smoke.mjs && node scripts/explicit-browser-smoke.mjs",
     "connect:chatgpt": "node scripts/connect-chatgpt.mjs"
   },
   "devDependencies": {
