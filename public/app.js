@@ -82,8 +82,7 @@ async function home() {
   const next = await api(searchPath());
   authMethod = next.auth_method; setDeviceAuthMethod(authMethod);
   state = next; currentCapture = null; currentView = null;
-  app.innerHTML = `${header()}<section class="intro"><p class="eyebrow">READ · LEAVE · THINK</p>
-    <h1>理解を育てる。</h1><p>${state.current_source ? `${esc(state.current_source.title)}<br>前回の本を引き継ぎます。表紙を残すと、本も切り替わります。` : '本の一節も、自分の気づきも。<br>記録から、同じ問いの理解が育ちます。'}</p></section><section id="feed"></section>`;
+  app.innerHTML = `${header()}<section id="feed"></section>`;
   app.removeAttribute('aria-busy'); wireHeader(); renderFeed();
   cacheRecent(state).catch(()=>{});
 }
@@ -509,8 +508,13 @@ initDevice().then(()=>resume()).catch(e=>showNotice(e.message));
 
 
 function themeHome(index){
- if(!index)return '';const themes=(index.themes||[]).filter(t=>t.is_tip!==0);
- return `<section class="theme-home"><p class="section-label">問い</p>${themes.map(t=>{const r=t.result?JSON.parse(t.result):null;return `<button class="capture-row theme-row" data-theme="${esc(t.id)}"><h3>${esc(t.question)}</h3>${r?.understanding?.[0]?`<p>${esc(r.understanding[0].text)}</p>`:''}${t.stale?'<span class="status">根拠に変更あり</span>':''}</button>`;}).join('')}</section>`;
+ if(!index)return '';
+ const themes=index.themes||[],byId=new Map(themes.map(t=>[t.id,t])),children=new Map();
+ for(const edge of index.branches||[]){const child=byId.get(edge.child_id);if(!child||!byId.has(edge.parent_id))continue;const list=children.get(edge.parent_id)||[];if(!list.some(t=>t.id===child.id))list.push(child);children.set(edge.parent_id,list);}
+ const count=(t,seen=new Set())=>{if(seen.has(t.id))return 0;seen.add(t.id);return Number(t.integration_count||0)+(children.get(t.id)||[]).reduce((n,c)=>n+count(c,seen),0);};
+ const sort=list=>[...list].sort((a,b)=>count(b)-count(a)||Number(b.updated_at||0)-Number(a.updated_at||0)||a.id.localeCompare(b.id));
+ const render=(t,seen=new Set())=>{if(seen.has(t.id))return '';const next=new Set(seen).add(t.id),branches=sort(children.get(t.id)||[]);return `<li><button class="capture-row theme-row" data-theme="${esc(t.id)}"><h2>${esc(t.question)}</h2></button>${branches.length?`<ul class="question-branches">${branches.map(c=>render(c,next)).join('')}</ul>`:''}</li>`;};
+ return `<section class="theme-home" aria-label="問い"><ul class="question-roots">${sort(themes.filter(t=>t.is_tip!==0)).map(t=>render(t)).join('')}</ul></section>`;
 }
 function wireThemeLinks(){document.querySelectorAll('[data-theme]').forEach(el=>el.onclick=event=>{event.preventDefault();openTheme(el.dataset.theme).catch(e=>showNotice(e.message));});}
 async function openTheme(themeId,fromCapture=null){
