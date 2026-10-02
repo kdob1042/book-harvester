@@ -66,7 +66,7 @@ test('a provider request receives an abort signal after durable cancellation',as
 });
 function appFixture(t){
  const {db,binding}=database();t.after(()=>db.close());const sent=[],pending=[],gates=new Map();let providerCalls=0;
- const env={DB:binding,APP_ORIGIN:'https://book.test',AI_EXECUTION_POLICY:'explicit',HARVEST_QUEUE:{async send(body){sent.push(body);}}};
+ const env={DB:binding,APP_ORIGIN:'https://book.test',AI_EXECUTION_POLICY:'automatic_legacy',HARVEST_QUEUE:{async send(body){sent.push(body);}}};
  const ctx={waitUntil(p){pending.push(p);}};
  const fake={
   async fetch(request,scoped,context){

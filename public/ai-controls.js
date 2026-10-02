@@ -1,6 +1,6 @@
 import {describeAIAction,isActiveOperation} from './ai-action-contract.js';
 const runs=new Map(),inFlight=new Map();
-let host,observer,pollTimer,polling=false,enabled=false,lastButton=null,lastClick=0;
+let host,observer,pollTimer,polling=false,enabled=false,lastButton=null,lastClick=0,automaticIngestion=false;
 const terminal=state=>['completed','canceled','failed'].includes(state);
 const stopError=()=>Object.assign(new Error('AI処理を停止しました。'),{canceled:true});
 function save(){try{sessionStorage.setItem('book-ai-operations',JSON.stringify([...runs.values()].filter(r=>!terminal(r.state)).map(({id,label,mode,state})=>({id,label,mode,state}))));}catch{}}
@@ -84,7 +84,7 @@ async function poll(){
   const remote=await control('/api/ai-operations');
   for(const value of remote.operations||[]){
    if(!value||terminal(value.state)||runs.has(value.id))continue;
-   const run={...value};runs.set(run.id,run);update(run,value);
+   const run={...value};runs.set(value.id,run);update(run,value);
   }
  }catch{/* Keep visible, stoppable local operations when status cannot be verified. */}
  finally{polling=false;schedulePoll([...runs.values()].some(r=>isActiveOperation(r.state))?1500:6000);}
@@ -98,8 +98,10 @@ function operationKey(path,options,spec){
 // uses the same request boundary rather than maintaining a separate spinner list.
 export function requestWithAIControls(path,options,request){
  initialize();
- const spec=describeAIAction(path,options.method||'GET');
+ const action=describeAIAction(path,options.method||'GET');
+ const spec=action?.mode==='ingestion'&&!automaticIngestion?null:action;
  if(!spec)return request(path,options).then(data=>{
+  if(path.startsWith('/api/state'))automaticIngestion=data.automatic_ingestion_ai===true;
   if(path.startsWith('/api/state')&&!enabled){enabled=true;try{for(const value of JSON.parse(sessionStorage.getItem('book-ai-operations')||'[]'))if(value?.id)runs.set(value.id,{...value,state:'unknown'});}catch{}render();schedulePoll(0);}
   if(path==='/api/logout')reset();return data;
  });

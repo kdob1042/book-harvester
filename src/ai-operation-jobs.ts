@@ -34,7 +34,7 @@ export async function attachRootJob(env:Env,op:Operation,path:string,data:Record
  else if(path.startsWith('/api/research'))await link(env,op.id,'research',String(value.id||path.split('/')[3]),true);
  else if(path.startsWith('/api/imports'))await link(env,op.id,'import',String(value.id||path.split('/')[3]),true);
  else if(path.startsWith('/api/captures')){
-  const capture=String(value.id||path.split('/')[3]);
+  const capture=String(path==='/api/captures'?value.id:path.split('/')[3]);
   const job=await env.DB.prepare('SELECT j.id FROM jobs j JOIN captures c ON c.id=j.capture_id AND c.version=j.version WHERE c.id=?').bind(capture).first<{id:string}>();
   if(job)await link(env,op.id,'capture',job.id,true);
  }
@@ -52,14 +52,14 @@ export async function attachChildJobs(env:Env,id:string){
  }
  for(const [capture,version] of captures){
   for(const kind of ['capture','graph','embedding'] as const){
-   if(kind==='embedding'&&env.AI_EXECUTION_POLICY==='explicit')continue;
+   if(kind==='embedding'&&env.AI_EXECUTION_POLICY!=='automatic_legacy')continue;
    const c=jobKinds[kind];
    const found=await env.DB.prepare(`SELECT j.${c.key} AS id FROM ${c.table} j JOIN captures c ON c.id=j.capture_id AND c.version=j.version WHERE c.id=? AND j.version=? AND j.state IN ('pending','running','blocked')`).bind(capture,version).all<{id:string}>();
    for(const job of found.results)await link(env,id,kind,job.id);
   }
-  const members=await env.DB.prepare("SELECT id FROM theme_jobs WHERE kind='membership' AND target_id=? AND version=? AND state IN ('pending','running','blocked') AND (?=1 OR EXISTS(SELECT 1 FROM explicit_ai_actions a WHERE a.kind='membership' AND a.target_id=theme_jobs.target_id AND a.version=theme_jobs.version))").bind(capture,version,env.AI_EXECUTION_POLICY!=='explicit'?1:0).all<{id:string}>();
+  const members=await env.DB.prepare("SELECT id FROM theme_jobs WHERE kind='membership' AND target_id=? AND version=? AND state IN ('pending','running','blocked') AND (?=1 OR EXISTS(SELECT 1 FROM explicit_ai_actions a WHERE a.kind='membership' AND a.target_id=theme_jobs.target_id AND a.version=theme_jobs.version))").bind(capture,version,env.AI_EXECUTION_POLICY==='automatic_legacy'?1:0).all<{id:string}>();
   for(const job of members.results)await link(env,id,'theme',job.id);
-  if(env.AI_EXECUTION_POLICY!=='explicit'){
+  if(env.AI_EXECUTION_POLICY==='automatic_legacy'){
    const memberships=await env.DB.prepare('SELECT theme_id FROM theme_memberships WHERE capture_id=? AND capture_version=?').bind(capture,version).all<{theme_id:string}>();
    for(const t of memberships.results)themes.add(t.theme_id);
   }

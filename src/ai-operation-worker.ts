@@ -20,7 +20,11 @@ export function withAIOperations(app:AppWorker){
  return {
   async fetch(request:Request,env:Env,ctx:ExecutionContext):Promise<Response>{
    const path=new URL(request.url).pathname,control=/^\/api\/ai-operations(?:\/([^/]+)(?:\/(cancel))?)?$/.exec(path),spec=describeAIAction(path,request.method),id=request.headers.get('x-ai-operation-id')||'';
-   if(!control&&(!spec||!id))return app.fetch(request,env,ctx);
+   if(path==='/api/state'&&request.method==='GET'){
+    const response=await app.fetch(request,env,ctx);if(!response.ok)return response;
+    return reply({...await response.json<Record<string,unknown>>(),automatic_ingestion_ai:env.AI_EXECUTION_POLICY==='automatic_legacy'},response.status,response.headers);
+   }
+   if(!control&&(!spec||!id||spec.mode==='ingestion'&&env.AI_EXECUTION_POLICY!=='automatic_legacy'))return app.fetch(request,env,ctx);
    // Reuse the application's own authentication checks and security headers.
    const gate=await app.fetch(new Request(new URL('/api/ai-activity',request.url),{headers:request.headers}),env,ctx);
    if(!gate.ok)return gate;
@@ -57,6 +61,11 @@ export function withAIOperations(app:AppWorker){
    const operationEnv=spec!.mode==='inline'?scopeAIOperation(buffered.env,id):buffered.env;
    let response:Response;
    try{
+    const extracting=/^\/api\/(captures|imports)\/([a-f0-9-]{36})\/(extract|retry)$/.exec(path);
+    if(extracting&&request.method==='POST'){
+     if(extracting[1]==='captures')await env.DB.prepare("UPDATE jobs SET state='blocked',error_code='extraction_required' WHERE capture_id=? AND state='canceled'").bind(extracting[2]).run();
+     else await env.DB.prepare("UPDATE import_jobs SET state='ready',error_code='extraction_required' WHERE id=? AND state='canceled'").bind(extracting[2]).run();
+    }
     response=await app.fetch(request,operationEnv,context);
     while(pending.length)await Promise.allSettled(pending.splice(0));
     const data=await response.clone().json<Record<string,any>>();
