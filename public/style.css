@@ -132,3 +132,5 @@ dialog::backdrop { background:#29363045; backdrop-filter:blur(3px); }
 .menu-panel { max-height:75dvh; overflow-y:auto; }
 
 .knowledge-branch{margin:24px 0 0 18px;border-left:2px solid var(--line,#ddd);padding-left:18px}.knowledge-branch .capture-row{position:relative}.knowledge-branch .capture-row:before{content:"";position:absolute;left:-18px;top:50%;width:18px;border-top:2px solid var(--line,#ddd)}
+
+.question-roots,.question-branches{list-style:none;margin:0;padding:0}.question-roots>li{margin-bottom:1.5rem}.question-branches{margin-left:.5rem;padding-left:.75rem;border-left:1px solid var(--line,#ddd)}.question-branches .theme-row{padding:12px 0}.question-branches h2{font-size:1rem}.theme-home .theme-row h2{margin:0}.theme-home{margin-top:1.5rem}

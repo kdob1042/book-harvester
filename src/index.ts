@@ -1,9 +1,11 @@
 import {readProposals,generateProposals,executeProposals} from './integration-proposals.ts';
+import {suggestRelations,saveRelation,removeOpposition} from './question-relations.ts';
+import {drilldown,saveDrilldown,addDrilldownCandidate} from './drilldown.ts';
 import {callBook} from './book-operations.ts';
 import {readDiscovery,latestDiscovery,integrateRecords} from './discovery.ts';
 import {automaticAI} from './ai-policy.ts';
 import {themeContext,saveAnalysis,rebuildTheme,discover} from './book-actions.ts';
-import {listThemes,readTheme,captureThemes,actThemeProposal,themeMigrationStatus,manageThemeMigration,editTheme,overrideTheme,mergeTheme} from './themes.ts';
+import {listThemes,readTheme,captureThemes,actThemeProposal,themeMigrationStatus,manageThemeMigration,editTheme,deleteTheme,overrideTheme,mergeTheme} from './themes.ts';
 import {aiConfigured,chatgptStatus,disconnectChatgpt} from './chatgpt.ts';
 import {ownerScope,syncDelta,receiptStatement,replayReceipt} from './sync.ts';
 import {semanticSearch} from './semantic.ts';
@@ -191,7 +193,7 @@ function exportData(env:Env){
  const stream=new ReadableStream<Uint8Array>({async start(controller){
   try{
    controller.enqueue(encoder.encode(`{"format":"book-harvester/v1","exported_at":${JSON.stringify(new Date().toISOString())}`));
-   for(const table of ['integration_proposals','integration_proposal_runs','knowledge_inputs','discovery_runs','integration_runs','sources','captures','capture_revisions','harvests','answers','views','view_revisions','asset_transcripts','assets','graph_jobs','graph_generations','graph_nodes','concepts','concept_mentions','graph_relations','graph_dependencies','view_proposals','graph_overrides','reading_sessions','reading_session_members','reflection_jobs','reflections','revisit_state','import_jobs','import_items','bibliography_jobs','research_runs','research_materials','external_source_index','embeddings','embedding_jobs','concept_overrides','concept_edits','capture_tombstones','sync_events','domains','lenses','themes','theme_domains','theme_memberships','theme_revisions','theme_syntheses','synthesis_evidence','theme_claim_relations','theme_relations','theme_view_links','theme_overrides','theme_proposals','theme_history','theme_dependencies','theme_member_lenses','theme_analysis_drafts','theme_changes','capture_visibility']){
+   for(const table of ['integration_proposals','integration_proposal_runs','question_oppositions','question_relation_runs','question_relation_choices','question_relations','drilldown_runs','drilldown_choices','knowledge_inputs','discovery_runs','integration_runs','sources','captures','capture_revisions','harvests','answers','views','view_revisions','asset_transcripts','assets','graph_jobs','graph_generations','graph_nodes','concepts','concept_mentions','graph_relations','graph_dependencies','view_proposals','graph_overrides','reading_sessions','reading_session_members','reflection_jobs','reflections','revisit_state','import_jobs','import_items','bibliography_jobs','research_runs','research_materials','external_source_index','embeddings','embedding_jobs','concept_overrides','concept_edits','capture_tombstones','sync_events','domains','lenses','themes','theme_domains','theme_memberships','theme_revisions','theme_syntheses','synthesis_evidence','theme_claim_relations','theme_relations','theme_view_links','theme_overrides','theme_proposals','theme_history','theme_dependencies','theme_member_lenses','theme_analysis_drafts','theme_changes','capture_visibility']){
     controller.enqueue(encoder.encode(`,${JSON.stringify(table)}:[`));let offset=0,first=true;
     while(true){
      const records=await rows<Record<string,unknown>>(env,`SELECT * FROM ${table} ORDER BY rowid LIMIT 50 OFFSET ?`,offset);
@@ -237,6 +239,8 @@ export async function route(request:Request,env:Env,ctx:ExecutionContext,trusted
  if(!path.startsWith('/api/'))return env.ASSETS.fetch(request);
  if(!trustedService&&!env.ACCESS_AUD&&!await loggedIn(request,env))fail(401,'ログインしてください。');
  const replay=await replayReceipt(env,request);if(replay)return json(replay);
+ const relation=/^\/api\/themes\/([^/]+)\/relationships(?:\/(save|remove))?$/.exec(path);if(relation&&method==='POST')return json(await (relation[2]==='save'?saveRelation:relation[2]==='remove'?removeOpposition:suggestRelations)(env,decodeURIComponent(relation[1]),await jsonBody(request.clone())));
+ const drill=/^\/api\/themes\/([^/]+)\/drilldown(?:\/(save|candidates))?$/.exec(path);if(drill&&method==='POST')return json(await (drill[2]==='candidates'?addDrilldownCandidate:drill[2]?saveDrilldown:drilldown)(env,decodeURIComponent(drill[1]),await jsonBody(request.clone())));
  if(path==='/api/book/integration-proposals'&&method==='GET')return json(await readProposals(env,url.searchParams.get('id')||undefined));
  if(path==='/api/book/integration-proposals'&&method==='POST')return json(await generateProposals(env,await jsonBody(request.clone())));
  if(path==='/api/book/integration-proposals/execute'&&method==='POST')return json(await executeProposals(env,await jsonBody(request.clone())));
@@ -251,7 +255,7 @@ export async function route(request:Request,env:Env,ctx:ExecutionContext,trusted
  if(path==='/api/themes/migration'&&method==='POST'){const r=await manageThemeMigration(env,await jsonBody(request.clone()));ctx.waitUntil(dispatch(env));return json(r);}
  if(path==='/api/themes'&&method==='GET')return json(await listThemes(env));
  const themeMatch=/^\/api\/themes\/([^/]+)(?:\/(proposals|history|overrides|merge))?$/.exec(path);
- if(themeMatch){const themeId=decodeURIComponent(themeMatch[1]);if(!themeMatch[2]&&method==='PATCH')return json(await editTheme(env,themeId,await jsonBody(request.clone())));if(themeMatch[2]==='merge'&&method==='POST')return json(await mergeTheme(env,themeId,await jsonBody(request.clone())));if(themeMatch[2]==='overrides'&&method==='POST')return json(await overrideTheme(env,themeId,await jsonBody(request.clone())));if(!themeMatch[2]&&method==='GET')return json(await readTheme(env,themeId));if(themeMatch[2]==='history'&&method==='GET'){const detail=await readTheme(env,themeId);return json(await rows(env,'SELECT * FROM theme_revisions WHERE theme_id=? ORDER BY version DESC LIMIT 20',themeId));}if(themeMatch[2]==='proposals'&&method==='POST')return json(await actThemeProposal(env,themeId,await jsonBody(request.clone())));}
+ if(themeMatch){const themeId=decodeURIComponent(themeMatch[1]);if(!themeMatch[2]&&method==='PATCH')return json(await editTheme(env,themeId,await jsonBody(request.clone())));if(!themeMatch[2]&&method==='DELETE')return json(await deleteTheme(env,themeId,await jsonBody(request.clone())));if(themeMatch[2]==='merge'&&method==='POST')return json(await mergeTheme(env,themeId,await jsonBody(request.clone())));if(themeMatch[2]==='overrides'&&method==='POST')return json(await overrideTheme(env,themeId,await jsonBody(request.clone())));if(!themeMatch[2]&&method==='GET')return json(await readTheme(env,themeId));if(themeMatch[2]==='history'&&method==='GET'){const detail=await readTheme(env,themeId);return json(await rows(env,'SELECT * FROM theme_revisions WHERE theme_id=? ORDER BY version DESC LIMIT 20',themeId));}if(themeMatch[2]==='proposals'&&method==='POST')return json(await actThemeProposal(env,themeId,await jsonBody(request.clone())));}
  if(path==='/api/sync'&&method==='GET')return json(await syncDelta(env,url.searchParams.get('cursor')));
  if(path==='/api/logout'&&method==='POST')return json({ok:true,...(env.ACCESS_AUD?{redirect:'/cdn-cgi/access/logout'}:{})},200,{'Set-Cookie':await logout(request,env)});
  if(path==='/api/ai-activity'&&method==='GET'){
@@ -374,10 +378,10 @@ export default {
   try{return headers(await route(request,env,ctx),env);}
   catch(e){
    const message=e instanceof HttpError?e.message:e instanceof AiError?(e.code==='daily_limit'?'今日のAI利用上限に達しました。':e.code==='ai_not_configured'?'AIの設定が必要です。':'資料について回答できませんでした。'):'操作を完了できませんでした。原資料を残したまま、もう一度お試しください。';
-   return headers(json({error:message},e instanceof HttpError?e.status:e instanceof AiError?503:500),env);
+   const aiMessage=e instanceof AiError?(e.code==='subscription_reauth_required'?'ChatGPTへの再接続が必要です。':e.code==='subscription_sharing_usage_limit_exceeded'?'ChatGPTの利用上限に達しました。':`AI処理に失敗しました（${e.code}）。もう一度お試しください。`):message;
+   return headers(json({error:e instanceof AiError&&!['daily_limit','ai_not_configured'].includes(e.code)?aiMessage:message,...e instanceof AiError?{error_code:e.code,retryable:e.retryable}:{}},e instanceof HttpError?e.status:e instanceof AiError?503:500),env);
   }
  },
  async scheduled(_event,env){await dispatch(env);await cleanup(env);},
  async queue(batch,env){await consume(batch,env);},
 } satisfies ExportedHandler<Env>;
-

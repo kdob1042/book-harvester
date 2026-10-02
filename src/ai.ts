@@ -30,6 +30,7 @@ export async function call(env:Env,captureId:string|null,endpoint:string,model:s
   await stmt(env,'UPDATE ai_calls SET state=?,input_tokens=?,output_tokens=? WHERE id=?','completed',data.usage?.input_tokens??data.usage?.prompt_tokens??0,data.usage?.output_tokens||0,callId).run();
   return data;
  } catch(e) {
+  console.error(JSON.stringify({event:'ai_call_failed',call_id:callId,endpoint,model,code:e instanceof SubscriptionError||e instanceof AiError?e.code:'connection_failed'}));
   await stmt(env,'UPDATE ai_calls SET state=? WHERE id=?','failed',callId).run();
   if(e instanceof SubscriptionError)throw new AiError(e.code,e.retryable);if(e instanceof AiError)throw e;throw new AiError('connection_failed',true);
  }
@@ -79,4 +80,3 @@ export async function answer(env:Env,capture:Capture,h:Harvest,question:string,f
  try{return validateAnswer(JSON.parse(blocks.filter(b=>b.type==='output_text').map(b=>b.text).join('')),material) as {answer:string;evidence:{quote:string;locator:string|null}[]};}
  catch{throw new AiError('invalid_output');}
 }
-
