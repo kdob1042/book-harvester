@@ -2,6 +2,10 @@ import {stmt,rows,id,now,fail} from './core.ts';
 // Reuse the focus ID. Archive both texts and their histories; never create a layer.
 export async function identityStatements(env:Env,target:string,sources:string[],guard:string,values:any[]){
  const edges=await rows<{parent_id:string;child_id:string}>(env,`SELECT parent_id,child_id FROM canonical_question_edges`);
+ const oppositionPairs=await rows<{left_id:string;right_id:string}>(env,'SELECT left_id,right_id FROM canonical_question_oppositions');
+ const resolve=(x:string)=>sources.includes(x)?target:x;
+ if(oppositionPairs.some(p=>resolve(p.left_id)===resolve(p.right_id)))fail(409,'対立する仮説は同一化できません。');
+ guard+=" AND NOT EXISTS(SELECT 1 FROM canonical_question_oppositions WHERE left_id IN(SELECT value FROM json_each(?)) AND right_id IN(SELECT value FROM json_each(?)))";values=[...values,JSON.stringify([target,...sources]),JSON.stringify([target,...sources])];
  const originalGuard=guard,originalValues=values;
  const graphQuery=`SELECT parent_id,child_id FROM canonical_question_edges`;
  guard+=` AND NOT EXISTS(SELECT parent_id,child_id FROM (${graphQuery}) EXCEPT SELECT json_extract(value,'$.parent_id'),json_extract(value,'$.child_id') FROM json_each(?)) AND NOT EXISTS(SELECT json_extract(value,'$.parent_id'),json_extract(value,'$.child_id') FROM json_each(?) EXCEPT SELECT parent_id,child_id FROM (${graphQuery}))`;

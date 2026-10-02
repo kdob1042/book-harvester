@@ -63,3 +63,5 @@ body.connections-open { overflow:hidden; }
   .cv-status { left:12px; bottom:20px; }.cv-legend { left:8px; top:8px; }
 }
 @media(prefers-reduced-motion:reduce) { .connections-viewer * { scroll-behavior:auto; transition:none; animation:none; } }
+
+.cv-edge-opposes { stroke:#bd7058; stroke-dasharray:3 4; }

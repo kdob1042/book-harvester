@@ -11,6 +11,7 @@ export async function proposeThemeChange(env:Env,a:Record<string,unknown>){
  const themeId=text(a.id,100),reason=text(a.reason,1000).trim(),action=text(a.action,20);if(!reason||!['edit','merge','split','candidate','archive','aliases'].includes(action))fail(400,'invalid_theme_change');
  const source=await stmt(env,'SELECT * FROM themes WHERE id=?',themeId).first<Row>();if(!source||source.version!==Number(a.version)||!['active','candidate'].includes(String(source.state)))fail(409,'theme_version_conflict');
  const newId=`theme:${id()}`,targetId=action==='merge'?text(a.target_id,100):['split','candidate'].includes(action)?newId:null,ids=[themeId,...targetId?[targetId]:[]];
+ if(action==='merge'&&await stmt(env,'SELECT 1 FROM canonical_question_oppositions WHERE left_id=? OR right_id=?',themeId,themeId).first())fail(409,'対立関係を持つ仮説は吸収できません。両方を保持してください。');
  const before=await snapshot(env,ids);if(Object.values(before).reduce((n,x)=>n+x.length,0)>300)fail(413,'theme_change_scope_limit');
  const after=structuredClone(before),from=after.themes.find(t=>t.id===themeId)!;from.version=Number(from.version)+1;
  if(action==='merge'){
@@ -29,6 +30,7 @@ export async function proposeThemeChange(env:Env,a:Record<string,unknown>){
 function snapshotGuard(ids:string[],current:Snapshot){let sql='1';const values:(string|number|null)[]=[];for(const [table,data] of Object.entries(current)){const owner=table==='themes'?'id':'theme_id';sql+=` AND (SELECT count(*) FROM ${table} WHERE ${owner} IN(SELECT value FROM json_each(?)))=?`;values.push(JSON.stringify(ids),data.length);if(data.length){const cols=Object.keys(data[0]);sql+=` AND NOT EXISTS(SELECT 1 FROM json_each(?) j WHERE NOT EXISTS(SELECT 1 FROM ${table} t WHERE ${cols.map(k=>`t.${k} IS json_extract(j.value,'$.${k}')`).join(' AND ')}))`;values.push(JSON.stringify(data));}}return {sql,values};}
 export async function applyThemeChange(env:Env,changeId:string,undo=false){
  const change=await readThemeChange(env,changeId),state=undo?'undone':'applied';if(change.state===state)return {ok:true,duplicate:true,id:changeId};if(change.state!==(undo?'applied':'proposed'))fail(409,'theme_change_state_conflict');
+ if(!undo&&change.action==='merge'&&await stmt(env,'SELECT 1 FROM canonical_question_oppositions WHERE left_id=? OR right_id=?',String(change.theme_id),String(change.theme_id)).first())fail(409,'対立関係を持つ仮説は吸収できません。');
  const ids=JSON.parse(String(change.theme_ids_json)) as string[],current=await snapshot(env,ids),expected=undo?JSON.parse(String(change.applied_json)):change.before as Snapshot;
  if(canonical(current)!==canonical(expected))fail(409,'theme_change_context_changed');const desired=structuredClone(undo?change.before as Snapshot:change.after as Snapshot);
  if(undo){for(const theme of desired.themes)theme.version=Number(current.themes.find(t=>t.id===theme.id)!.version)+1;for(const theme of current.themes)if(!desired.themes.some(t=>t.id===theme.id))desired.themes.push({...theme,state:'archived',version:Number(theme.version)+1});}

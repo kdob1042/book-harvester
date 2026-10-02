@@ -110,9 +110,11 @@ export function openConnections(opener = document.activeElement) {
       if (!a || !b) continue;
       const x1 = a.x + CARD.width / 2, y1 = a.y + CARD.height, x2 = b.x + CARD.width / 2, y2 = b.y;
       const selectedEdge = edge.from === selection || edge.to === selection;
-      const path = svgElement('path', { d: `M ${x1} ${y1} C ${x1} ${(y1 + y2) / 2}, ${x2} ${(y1 + y2) / 2}, ${x2} ${y2}`,
+      const opposing=edge.kind==='opposes';
+      const horizontal=opposing?`M ${a.x+CARD.width} ${a.y+CARD.height/2} L ${b.x} ${b.y+CARD.height/2}`:null;
+      const path = svgElement('path', { d: horizontal || `M ${x1} ${y1} C ${x1} ${(y1 + y2) / 2}, ${x2} ${(y1 + y2) / 2}, ${x2} ${y2}`,
         class: `cv-edge cv-edge-${edge.kind}${selectedEdge ? ' cv-edge-selected' : ''}${edge.stale ? ' cv-edge-stale' : ''}` });
-      path.append(svgElement('title', {}, ({ input: '保存された統合元', drilldown: '掘り下げた子問い', hierarchy: '保存された親子関係', material: '問いに集まった材料' })[edge.kind]));
+      path.append(svgElement('title', {}, ({ opposes: '対立する仮説', input: '保存された統合元', drilldown: '掘り下げた子問い', hierarchy: '保存された親子関係', material: '問いに集まった材料' })[edge.kind]));
       svg.append(path);
     }
     for (const node of shown.nodes) {
@@ -162,7 +164,7 @@ export function openConnections(opener = document.activeElement) {
     for (const edge of rows) {
       const other = graph.nodes.find(n => n.id === (edge.from === node.id ? edge.to : edge.from));
       if (!other) continue;
-      const labels = { input: ['統合元', '統合先'], drilldown: ['掘り下げた問い', '元の問い'], hierarchy: ['子の問い', '親の問い'], material: ['材料', '問い'] };
+      const labels = { opposes: ['対立', '対立'], input: ['統合元', '統合先'], drilldown: ['掘り下げた問い', '元の問い'], hierarchy: ['子の問い', '親の問い'], material: ['材料', '問い'] };
       const label = labels[edge.kind][edge.from === node.id ? 0 : 1];
       const row = button('', `${label}：${other.title}`, () => select(other.id), 'cv-connection');
       row.append(element('span', 'cv-connection-kind', label), element('span', '', other.title));
