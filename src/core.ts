@@ -1,6 +1,7 @@
 export type Evidence = { origin: 'source'|'user'|'ai'; quote: string|null; locator: string|null; certainty: 'explicit'|'inferred'|'uncertain' };
 export type Harvest = {
  contract_version: number;
+ classification?: {domain_ids:string[];lens_ids:string[]};
  source: { title: string|null; page: string|null; chapter: string|null; published_at:string|null; subject_period:string|null; certainty: string };
  extracted_text: string; summary: string; uncertainties: string[];
  claims: { id:string; text:string; conditions:string[]; evidence:Evidence }[];
