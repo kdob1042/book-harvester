@@ -1,4 +1,4 @@
-import {automaticAI} from './ai-policy.ts';
+import {automaticAI} from './execution-policy.ts';
 export type Evidence = { origin: 'source'|'user'|'ai'; quote: string|null; locator: string|null; certainty: 'explicit'|'inferred'|'uncertain' };
 export type Harvest = {
  contract_version: number;
