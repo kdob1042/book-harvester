@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {fixture,sentence} from './helpers.js';
+import {fixture,sentence,setProviderDouble,graphResponse} from './helpers.js';
 import {callBook} from '../src/book-operations.ts';
 import {toolSpecs,required} from '../src/mcp-tools.ts';
 test('MCP save uses independent source and same Web record; retries do not duplicate',async()=>{
@@ -43,14 +43,13 @@ test('theme conversation draft is separate from records and views, bound to cont
  await assert.rejects(callBook(f.env,f.ctx,'save_analysis_draft',{...args,body:'changed'}),/idempotency_conflict/);
  await assert.rejects(callBook(f.env,f.ctx,'save_analysis_draft',{...args,idempotency_key:'theme-draft-key-00002'}),/theme_context_changed/);
 });
-test('explicit relation discovery authorizes only current record jobs',async()=>{
- const f=await fixture();f.env.AI_EXECUTION_POLICY='explicit';const saved=await callBook(f.env,f.ctx,'save_capture',{text:sentence,source:'供給のしくみ',idempotency_key:'discovery-capture-key-001'});await f.drain();
+test('explicit discovery persists candidates without changing graph or memberships',async t=>{
+ const f=await fixture();t.after(f.close);t.after(()=>setProviderDouble(null));f.env.AI_EXECUTION_POLICY='explicit';const saved=await callBook(f.env,f.ctx,'save_capture',{text:sentence,source:'供給のしくみ',idempotency_key:'discovery-capture-key-001'});await f.drain();
+ setProviderDouble(async()=>graphResponse({},{candidates:[],destination:{theme_id:'theme:work',question:'専門性',scope:'仕事',exclusions:''}}));
  const args={id:saved.data.id,version:1,idempotency_key:'explicit-discovery-key-01'};
- const action=await callBook(f.env,f.ctx,'discover_relations',args);assert.equal(action.accepted,true);await f.drain();
- assert.equal(f.db.prepare('SELECT state FROM graph_jobs WHERE capture_id=?').get(saved.data.id).state,'completed');
- assert.equal(f.db.prepare("SELECT state FROM theme_jobs WHERE kind='membership' AND target_id=?").get(saved.data.id).state,'completed');
- assert.equal(f.db.prepare("SELECT count(*) AS n FROM theme_jobs WHERE kind='synthesis'").get().n,0);
- const before=f.db.prepare('SELECT count(*) AS n FROM ai_calls').get().n;await callBook(f.env,f.ctx,'discover_relations',args);await f.drain();assert.equal(f.db.prepare('SELECT count(*) AS n FROM ai_calls').get().n,before);
+ const action=await callBook(f.env,f.ctx,'discover_relations',args);assert.equal(action.state,'completed');
+ for(const table of ['theme_memberships','theme_revisions'])assert.equal(f.db.prepare(`SELECT count(*) AS n FROM ${table}`).get().n,0);
+ const before=f.db.prepare('SELECT count(*) AS n FROM ai_calls').get().n;await callBook(f.env,f.ctx,'discover_relations',args);assert.equal(f.db.prepare('SELECT count(*) AS n FROM ai_calls').get().n,before);
 });
 test('bounded exports omit private object keys and support pagination',async()=>{
  const f=await fixture();await callBook(f.env,f.ctx,'save_capture',{text:'書き出し',idempotency_key:'export-capture-key-0001'});
