@@ -81,4 +81,4 @@ try{
  const viewRow=page.locator('.view-row').filter({hasText:'利用者の参入しやすさ'});await viewRow.click();await expect(page.getByText('根拠の資料が訂正・削除されています。',{exact:false})).toBeVisible();await expect(page.locator('h1')).toContainText('景気の見方は変えない。');
  if(browserErrors.length)throw new Error(browserErrors.join('\n'));
  console.log('Browser smoke passed: mobile/desktop, 1 primary action, auto-save, revisit, adoption/history, microphone fallback, cross-book evidence/hide, single-action View update, source deletion preserves View, no horizontal overflow.');
-}finally{await browser.close();await new Promise(resolve=>server.close(resolve));await f.close();}
+}finally{await browser.close();server.closeAllConnections();await new Promise(resolve=>server.close(resolve));await f.close();}
