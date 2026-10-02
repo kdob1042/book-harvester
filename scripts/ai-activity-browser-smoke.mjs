@@ -24,6 +24,14 @@ try{
   await page.locator('[data-theme="theme:work"]').click();
   await page.getByRole('button',{name:'深掘り',exact:true}).click();
   await page.getByRole('button',{name:'AIで候補を出す',exact:true}).click();
+  await expect(page.getByRole('heading',{name:'AIを実行しますか？',exact:true})).toBeVisible();
+  if(resolveAI)throw new Error('AI started before confirmation');
+  await page.getByRole('button',{name:'いいえ',exact:true}).click();
+  await expect(page.locator('#ai-activity')).toBeHidden();
+  await page.getByRole('button',{name:'AIで候補を出す',exact:true}).click();
+  const yes=page.getByRole('button',{name:'はい、実行する',exact:true});
+  if((await yes.boundingBox()).height<56)throw new Error('Confirmation target too small');
+  await yes.click();
   await expect(page.locator('.ai-dock-trigger')).toHaveText('深掘り中');
   await expect.poll(()=>Boolean(resolveAI)).toBe(true);
   // The dock is interactive above a native modal, including its backdrop.
@@ -55,6 +63,7 @@ try{
   await page.getByRole('button',{name:'もう一度探索',exact:true}).click();
   resolveAI=null;rejectAI=null;
   await page.getByRole('button',{name:'AIで候補を出す',exact:true}).click();
+  await page.getByRole('button',{name:'はい、実行する',exact:true}).click();
   await expect.poll(()=>Boolean(rejectAI)).toBe(true);
   rejectAI(Error('Synthetic AI failure'));
   await expect(page.locator('.ai-dock-trigger')).toContainText('深掘り失敗');
@@ -75,6 +84,7 @@ try{
   await page.getByRole('button',{name:'← 育てている問い',exact:true}).click();
   await page.locator(`[data-capture="${saved.id}"]`).click();
   await page.getByRole('button',{name:'抽出する · AI',exact:true}).click();
+  await page.getByRole('button',{name:'はい、実行する',exact:true}).click();
   await expect(page.locator('.ai-dock-trigger')).toContainText('知見抽出待ち');
   await page.locator('.ai-dock-trigger').click();
   await page.getByRole('button',{name:'停止',exact:true}).click();
