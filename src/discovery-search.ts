@@ -1,9 +1,11 @@
 import {rows} from './core.ts';
+import {shortlist,tokens} from './classification.js';
 import {AiError} from './ai.ts';
 import {respond} from './ai-response.ts';
-import {captureMaterials,themeMaterial,type Material} from './knowledge-materials.ts';
+import {captureMaterials,capturePages,themeMaterial,type Material} from './knowledge-materials.ts';
 
 export const DISCOVERY_CANDIDATE_LIMIT = 10;
+export const DISCOVERY_RETRIEVAL_LIMIT = 30;
 
 const kinds = ['direct','cause','effect','counterexample','analogy'] as const;
 type Query = {kind:typeof kinds[number];terms:string[]};
@@ -69,14 +71,35 @@ export async function searchDiscovery(env:Env,anchor:Material,queries:Query[]) {
  return lanes;
 }
 
-export function combineDiscovery(anchor:Material,baseline:Material[],lanes:Material[][]):Material[] {
+export function combineDiscovery(anchor:Material,lanes:Material[][]):Material[] {
  const selected:Material[]=[],seen=new Set([anchor.fingerprint]);
  const add=(m:Material) => {if(!seen.has(m.fingerprint)){seen.add(m.fingerprint);selected.push(m);}};
- // Reserve space for expanded searches even when one classification dominates.
- for (const m of baseline.slice(0,5)) add(m);
- for (let i=0;i<24 && selected.length<DISCOVERY_CANDIDATE_LIMIT;i++) for(const lane of lanes) {
-  if(lane[i] && selected.length<DISCOVERY_CANDIDATE_LIMIT) add(lane[i]);
+ // Round-robin retrieval keeps every search direction available for AI judgment.
+ for (let i=0;i<24 && selected.length<DISCOVERY_RETRIEVAL_LIMIT;i++) for(const lane of lanes) {
+  if(lane[i] && selected.length<DISCOVERY_RETRIEVAL_LIMIT) add(lane[i]);
  }
- for(const m of baseline) if(selected.length<DISCOVERY_CANDIDATE_LIMIT) add(m);
  return selected;
+}
+
+export async function legacyDiscovery(env:Env,anchor:Material){
+ const pool:Material[]=[];let total=0;
+ if(anchor.kind==='theme'){
+  const terms=tokens(anchor.title+' '+(anchor.question?.content||'')).slice(0,24),needle=terms.length?terms:[''];
+  const score=(column:string)=>needle.map(()=>`CASE WHEN instr(lower(${column}),?)>0 THEN 1 ELSE 0 END`).join('+');
+  const themes=await rows<any>(env,`SELECT t.id,(${score("t.question||' '||COALESCE(t.content,'')")})+4*EXISTS(SELECT 1 FROM theme_domains d WHERE d.theme_id=t.id AND d.domain_id IN(SELECT value FROM json_each(?))) AS score FROM themes t WHERE t.state='active' AND t.merged_into IS NULL AND t.id<>? AND NOT EXISTS(SELECT 1 FROM theme_overrides o WHERE o.theme_id=t.id AND o.item_key='theme' AND o.action='hidden') ORDER BY score DESC,t.id LIMIT 50`,...needle,JSON.stringify(anchor.domain_ids),anchor.id);
+  for(const t of themes.filter(t=>t.score>0)){try{pool.push(await themeMaterial(env,t.id));}catch{}}
+  const captures=await rows<any>(env,`SELECT c.id,c.version,c.original_text,c.corrected_text,c.note,h.result,(${score("COALESCE(c.corrected_text,json_extract(h.result,'$.extracted_text'),c.original_text)||' '||COALESCE(c.note,'')||' '||COALESCE(json_extract(h.result,'$.summary'),'')||' '||COALESCE(json_extract(h.result,'$.claims'),'')||' '||COALESCE(json_extract(h.result,'$.concepts'),'')")}) AS score FROM captures c JOIN harvests h ON h.capture_id=c.id AND h.version=c.version WHERE NOT EXISTS(SELECT 1 FROM capture_visibility v WHERE v.capture_id=c.id AND v.hidden=1) ORDER BY score DESC,c.id LIMIT 50`,...needle);
+  const linked=await rows<any>(env,`SELECT c.id,c.version,c.original_text,c.corrected_text,c.note,h.result
+   FROM captures c JOIN harvests h ON h.capture_id=c.id AND h.version=c.version
+   JOIN current_theme_memberships m ON m.capture_id=c.id WHERE m.theme_id=?
+   AND NOT EXISTS(SELECT 1 FROM capture_visibility v WHERE v.capture_id=c.id AND v.hidden=1)
+   ORDER BY c.id LIMIT 50`,anchor.id);
+  const linkedIds=new Set(linked.map(c=>c.id));
+  const read=await captureMaterials(env,[...linked,...captures.filter(r=>r.score>0&&!linkedIds.has(r.id))]);
+  pool.push(...read.map(m=>({...m,linked:linkedIds.has(m.id)})));total=pool.length;
+ }else{
+  for await(const page of capturePages(env,anchor.id)){total+=page.length;pool.push(...page);}
+  for(const t of await rows<any>(env,"SELECT t.id FROM themes t JOIN theme_syntheses s ON s.theme_id=t.id WHERE t.state='active' AND t.id<>?",anchor.id)){try{pool.push(await themeMaterial(env,t.id));}catch{}}
+ }
+ return {candidates:shortlist(anchor,pool,DISCOVERY_RETRIEVAL_LIMIT) as Material[],scanned:total};
 }
