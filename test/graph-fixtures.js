@@ -19,6 +19,7 @@ export function connectedGraph(input){
 export async function semanticMock(url,opts){
  if(url.endsWith('/audio/transcriptions'))return Response.json({text:b});
  const body=JSON.parse(opts.body);
+ if(body.text.format.name==='theme_membership_v1')return graphResponse({},{memberships:[],candidate:null});
  if(body.text.format.name==='knowledge_graph_v1'){const input=JSON.parse(body.input);return graphResponse(input,connectedGraph(input));}
  const text=JSON.parse(body.input[0].content[0].text).original_or_corrected_text.trim();
  const value=material(text,text===a?'本A':text===b?'本B':'本C');

@@ -1,3 +1,4 @@
+import {listThemes,readTheme,captureThemes,actThemeProposal,themeMigrationStatus,manageThemeMigration,editTheme,overrideTheme,mergeTheme} from './themes.ts';
 import {aiConfigured,chatgptStatus,disconnectChatgpt} from './chatgpt.ts';
 import {ownerScope,syncDelta,receiptStatement,replayReceipt} from './sync.ts';
 import {semanticSearch} from './semantic.ts';
@@ -185,7 +186,7 @@ function exportData(env:Env){
  const stream=new ReadableStream<Uint8Array>({async start(controller){
   try{
    controller.enqueue(encoder.encode(`{"format":"book-harvester/v1","exported_at":${JSON.stringify(new Date().toISOString())}`));
-   for(const table of ['sources','captures','capture_revisions','harvests','answers','views','view_revisions','asset_transcripts','assets','graph_jobs','graph_generations','graph_nodes','concepts','concept_mentions','graph_relations','graph_dependencies','view_proposals','graph_overrides','reading_sessions','reading_session_members','reflection_jobs','reflections','revisit_state','import_jobs','import_items','bibliography_jobs','research_runs','research_materials','external_source_index','embeddings','embedding_jobs','concept_overrides','concept_edits','capture_tombstones','sync_events']){
+   for(const table of ['sources','captures','capture_revisions','harvests','answers','views','view_revisions','asset_transcripts','assets','graph_jobs','graph_generations','graph_nodes','concepts','concept_mentions','graph_relations','graph_dependencies','view_proposals','graph_overrides','reading_sessions','reading_session_members','reflection_jobs','reflections','revisit_state','import_jobs','import_items','bibliography_jobs','research_runs','research_materials','external_source_index','embeddings','embedding_jobs','concept_overrides','concept_edits','capture_tombstones','sync_events','domains','lenses','themes','theme_domains','theme_memberships','theme_revisions','theme_syntheses','synthesis_evidence','theme_claim_relations','theme_relations','theme_view_links','theme_overrides','theme_proposals','theme_history','theme_dependencies','theme_member_lenses']){
     controller.enqueue(encoder.encode(`,${JSON.stringify(table)}:[`));let offset=0,first=true;
     while(true){
      const records=await rows<Record<string,unknown>>(env,`SELECT * FROM ${table} ORDER BY rowid LIMIT 50 OFFSET ?`,offset);
@@ -229,6 +230,11 @@ async function route(request:Request,env:Env,ctx:ExecutionContext){
  if(!path.startsWith('/api/'))return env.ASSETS.fetch(request);
  if(!env.ACCESS_AUD&&!await loggedIn(request,env))fail(401,'ログインしてください。');
  const replay=await replayReceipt(env,request);if(replay)return json(replay);
+ if(path==='/api/themes/migration'&&method==='GET')return json(await themeMigrationStatus(env));
+ if(path==='/api/themes/migration'&&method==='POST'){const r=await manageThemeMigration(env,await jsonBody(request.clone()));ctx.waitUntil(dispatch(env));return json(r);}
+ if(path==='/api/themes'&&method==='GET')return json(await listThemes(env));
+ const themeMatch=/^\/api\/themes\/([^/]+)(?:\/(proposals|history|overrides|merge))?$/.exec(path);
+ if(themeMatch){const themeId=decodeURIComponent(themeMatch[1]);if(!themeMatch[2]&&method==='PATCH')return json(await editTheme(env,themeId,await jsonBody(request.clone())));if(themeMatch[2]==='merge'&&method==='POST')return json(await mergeTheme(env,themeId,await jsonBody(request.clone())));if(themeMatch[2]==='overrides'&&method==='POST')return json(await overrideTheme(env,themeId,await jsonBody(request.clone())));if(!themeMatch[2]&&method==='GET')return json(await readTheme(env,themeId));if(themeMatch[2]==='history'&&method==='GET'){const detail=await readTheme(env,themeId);return json(await rows(env,'SELECT * FROM theme_revisions WHERE theme_id=? ORDER BY version DESC LIMIT 20',themeId));}if(themeMatch[2]==='proposals'&&method==='POST')return json(await actThemeProposal(env,themeId,await jsonBody(request.clone())));}
  if(path==='/api/sync'&&method==='GET')return json(await syncDelta(env,url.searchParams.get('cursor')));
  if(path==='/api/logout'&&method==='POST')return json({ok:true,...(env.ACCESS_AUD?{redirect:'/cdn-cgi/access/logout'}:{})},200,{'Set-Cookie':await logout(request,env)});
  if(path==='/api/state'&&method==='GET'){
@@ -240,7 +246,7 @@ async function route(request:Request,env:Env,ctx:ExecutionContext){
    listReflections(env),readRevisit(env),
    rows(env,'SELECT id,name,format,state,error_code FROM import_jobs ORDER BY created_at DESC LIMIT 10'),
   ]);
-  const ai=await chatgptStatus(env);return json({scope:await ownerScope(env),auth_method:env.ACCESS_AUD?'cloudflare_access':'password',ai_configured:ai.mode==='chatgpt'?ai.state==='connected':aiConfigured(env),ai,captures:search?captures.sort((a,b)=>(semantic.matches.find(x=>x.capture_id===b.id)?.score||0)-(semantic.matches.find(x=>x.capture_id===a.id)?.score||0)):captures,filter_active:Boolean(filters.source||filters.year||filters.origin),search_state:semantic.state,semantic_matches:semantic.matches,views,reflections,revisits,imports,research:await rows(env,'SELECT id,question,state FROM research_runs ORDER BY created_at DESC LIMIT 10'),current_source:current,usage:{calls:usage?.calls||0},daily_limit:Number(env.AI_DAILY_CALL_LIMIT)});
+  const ai=await chatgptStatus(env);return json({scope:await ownerScope(env),auth_method:env.ACCESS_AUD?'cloudflare_access':'password',ai_configured:ai.mode==='chatgpt'?ai.state==='connected':aiConfigured(env),ai,captures:search?captures.sort((a,b)=>(semantic.matches.find(x=>x.capture_id===b.id)?.score||0)-(semantic.matches.find(x=>x.capture_id===a.id)?.score||0)):captures,filter_active:Boolean(filters.source||filters.year||filters.origin),search_state:semantic.state,semantic_matches:semantic.matches,views,reflections,revisits,imports,research:await rows(env,'SELECT id,question,state FROM research_runs ORDER BY created_at DESC LIMIT 10'),current_source:current,usage:{calls:usage?.calls||0},daily_limit:Number(env.AI_DAILY_CALL_LIMIT),theme_index:await listThemes(env)});
  }
  if(path==='/api/captures'&&method==='POST'){
   const saved=await saveCapture(request,env);ctx.waitUntil(dispatch(env));return saved;
@@ -248,7 +254,7 @@ async function route(request:Request,env:Env,ctx:ExecutionContext){
  const match=/^\/api\/captures\/([a-f0-9-]{36})(?:\/(assets|retry|adopt|ask|proposal|hide))?$/.exec(path);
  if(match){
   const [,captureId,action]=match;
-  if(!action&&method==='GET'){const c=await getCapture(env,captureId);if(!c)fail(404,'記録が見つかりません。');return json({...c,graph:await readGraph(env,c.id,c.version),import_ref:await stmt(env,'SELECT i.job_id,i.ordinal,i.locator,j.name FROM import_items i JOIN import_jobs j ON j.id=i.job_id WHERE i.capture_id=?',c.id).first(),bibliography:c.source_bibliography?JSON.parse(c.source_bibliography):null});}
+  if(!action&&method==='GET'){const c=await getCapture(env,captureId);if(!c)fail(404,'記録が見つかりません。');return json({...c,themes:await captureThemes(env,c.id),graph:await readGraph(env,c.id,c.version),import_ref:await stmt(env,'SELECT i.job_id,i.ordinal,i.locator,j.name FROM import_items i JOIN import_jobs j ON j.id=i.job_id WHERE i.capture_id=?',c.id).first(),bibliography:c.source_bibliography?JSON.parse(c.source_bibliography):null});}
   if(!action&&method==='PATCH'){const saved=await editCapture(request,env,captureId);ctx.waitUntil(dispatch(env));return saved;}
   if(!action&&method==='DELETE')return deleteCapture(request,env,captureId);
   if(action==='assets'&&method==='POST'){const saved=await supplement(request,env,captureId);ctx.waitUntil(dispatch(env));return saved;}

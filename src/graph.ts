@@ -1,3 +1,4 @@
+import {themeCandidateCaptures,relevantViews} from './themes.ts';
 import {aiConfigured} from './chatgpt.ts';
 import {semanticCandidates} from './semantic.ts';
 import {stmt,rows,getCapture,now,id,digest,type Harvest,type View} from './core.ts';
@@ -52,16 +53,19 @@ async function candidatesFor(env:Env,captureId:string,h:Harvest):Promise<Candida
  // Bounded SQL retrieval: recent context plus up to four older semantic-label/summary hits.
  // Recent candidates are included regardless of shared words, so structure can bridge different terminology.
  const terms=[...h.concepts.map(k=>k.name),...h.questions.map(q=>q.text)].slice(0,6).map(x=>`%${x.slice(0,80).replace(/[\\%_]/g,'\\$&')}%`);
+ const thematic=await themeCandidateCaptures(env,captureId),thematicGenerations=thematic.length?await rows<{id:string}>(env,'SELECT id FROM current_graph_generations WHERE capture_id IN(SELECT value FROM json_each(?))',JSON.stringify(thematic.map(x=>x.capture_id))):[];
  const recent=await rows<{id:string}>(env,'SELECT id FROM current_graph_generations WHERE capture_id<>? ORDER BY created_at DESC LIMIT 8',captureId);
  const hits=terms.length?await rows<{id:string}>(env,`SELECT DISTINCT g.id FROM current_graph_generations g JOIN graph_nodes n ON n.generation_id=g.id WHERE g.capture_id<>? AND (${terms.map(()=>"n.text LIKE ? ESCAPE '\\'").join(' OR ')}) ORDER BY g.created_at DESC LIMIT 4`,captureId,...terms):[];
  const semanticIds=await semanticCandidates(env,captureId),semanticGenerations=semanticIds.length?await rows<{id:string}>(env,'SELECT id FROM current_graph_generations WHERE capture_id IN(SELECT value FROM json_each(?))',JSON.stringify(semanticIds.map(x=>x.capture_id))):[];
- const ids=[...new Set([...semanticGenerations,...hits,...recent].map(x=>x.id))].slice(0,12);
+ const ids=[...new Set([...thematicGenerations,...semanticGenerations,...hits,...recent].map(x=>x.id))].slice(0,12);
  const raw=ids.length?await rows<{id:string;kind:string;capture_id:string;version:number;text:string;payload:string;canonical_id:string|null;source_title:string|null;page:string|null}>(env,`SELECT n.*,m.effective_id AS canonical_id,s.title AS source_title,c.page FROM current_graph_nodes n JOIN captures c ON c.id=n.capture_id LEFT JOIN sources s ON s.id=c.source_id LEFT JOIN effective_concept_mentions m ON m.node_id=n.id WHERE n.generation_id IN(${ids.map(()=>'?').join(',')}) ORDER BY n.capture_id,n.kind,n.local_id LIMIT 468`,...ids):[];
  // Keep whole Capture groups; a truncated group could lose the claim backing a concept.
  const selected:typeof raw=[];
  for(const cap of new Set(raw.map(n=>n.capture_id))){const group=raw.filter(n=>n.capture_id===cap);if(selected.length+group.length<=120)selected.push(...group);}
  const nodes=selected.map(n=>({...n,canonical_id:n.canonical_id||undefined,payload:JSON.parse(n.payload) as Record<string,unknown>}));
- const views=await rows<View>(env,'SELECT * FROM views ORDER BY created_at DESC LIMIT 6');
+ const themeIds=await rows<{theme_id:string}>(env,'SELECT theme_id FROM current_theme_memberships WHERE capture_id=?',captureId);
+ const matchedViews=await relevantViews(env,themeIds.map(t=>t.theme_id),h.concepts.map(k=>k.name),[captureId,...nodes.map(n=>n.capture_id)]);
+ const views=matchedViews.length?matchedViews:await rows<View>(env,'SELECT * FROM views ORDER BY created_at DESC LIMIT 6');
  return {nodes,views};
 }
 

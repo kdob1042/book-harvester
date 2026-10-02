@@ -1,3 +1,4 @@
+import {processThemeJob} from '../src/themes.ts';
 // Tests may only use explicit provider doubles; never send fixture payloads off-device.
 const testFetch=globalThis.fetch;let providerDouble=null;
 export function setProviderDouble(fn){providerDouble=fn;}
@@ -44,7 +45,7 @@ export async function fixture({key='test-fixture-key',limit='60'}={}){
  }
  async function login(){const response=await request('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:env.APP_PASSWORD})});if(response.status!==200)throw new Error('Fixture login failed');}
  async function settle(){while(pending.length)await Promise.all(pending.splice(0));}
- async function drain(fetcher=mockAi){await settle();while(messages.length){const message=messages.shift();if(message.job_id)await processJob(env,message.job_id,fetcher);else if(message.graph_job_id)await processGraphJob(env,message.graph_job_id,fetcher);else if(message.import_job_id)await processImport(env,message.import_job_id);else if(message.bibliography_capture_id)await processBibliography(env,message.bibliography_capture_id,async()=>Response.json({docs:[]}));else if(message.embedding_capture_id)await processEmbedding(env,message.embedding_capture_id,async()=>Response.json({data:[{embedding:Array.from({length:256},(_,i)=>i===0?1:0)}]}));else if(message.research_id)await processResearch(env,message.research_id,fetcher);else if(message.reflection_job_id)await processReflection(env,message.reflection_job_id,fetcher);else throw Error('Unknown fixture queue message');await dispatch(env);}}
+ async function drain(fetcher=mockAi){await settle();while(messages.length){const message=messages.shift();if(message.job_id)await processJob(env,message.job_id,fetcher);else if(message.theme_job_id)await processThemeJob(env,message.theme_job_id,fetcher);else if(message.graph_job_id)await processGraphJob(env,message.graph_job_id,fetcher);else if(message.import_job_id)await processImport(env,message.import_job_id);else if(message.bibliography_capture_id)await processBibliography(env,message.bibliography_capture_id,async()=>Response.json({docs:[]}));else if(message.embedding_capture_id)await processEmbedding(env,message.embedding_capture_id,async()=>Response.json({data:[{embedding:Array.from({length:256},(_,i)=>i===0?1:0)}]}));else if(message.research_id)await processResearch(env,message.research_id,fetcher);else if(message.reflection_job_id)await processReflection(env,message.reflection_job_id,fetcher);else throw Error('Unknown fixture queue message');await dispatch(env);}}
  return {env,db,objects,messages,pending,request,login,settle,drain,worker,ctx,close:async()=>{await settle();db.close();}};
 }
 export const sentence='供給能力が追いつかないと価格が上昇する。';
@@ -57,6 +58,7 @@ export function result(){return {
 };}
 export async function mockAi(url,options){
  if(url.endsWith('/audio/transcriptions'))return Response.json({text:sentence});
+ if(JSON.parse(options.body).text?.format?.name==='theme_membership_v1')return graphResponse({}, {memberships:[],candidate:null});
  if(JSON.parse(options.body).text?.format?.name==='reading_reflection_v1'){const input=JSON.parse(JSON.parse(options.body).input);return graphResponse(input,reflectionResult(input));}
  if(JSON.parse(options.body).text?.format?.name==='knowledge_graph_v1')return graphResponse(JSON.parse(JSON.parse(options.body).input));
  return Response.json({status:'completed',output:[{type:'message',content:[{type:'output_text',text:JSON.stringify(result())}]}],usage:{input_tokens:100,output_tokens:200}});
