@@ -54,9 +54,9 @@ function login() {
   });
 }
 
-function header(record = true) {
+function header(record = true, primary = true) {
   return `<header class="top"><div class="brand"><img src="/favicon.svg" alt="">Book Harvester</div><div class="top-actions">
-    ${record ? '<button id="record" class="primary">記録する<span aria-hidden="true">＋</span></button>' : ''}
+    ${record ? `<button id="record" class="${primary?'primary':'quiet'}">記録する<span aria-hidden="true">＋</span></button>` : ''}
     <details class="menu"><summary aria-label="メニュー">···</summary><div class="menu-panel">
     <label><span>記録を検索</span><input id="search" type="search" placeholder="曖昧な言葉でも" value="${esc(query)}"></label>
     <details class="fold"><summary>検索を絞り込む</summary><label><span>本・出典名</span><input id="search-source" value="${esc(searchFilters.source)}"></label><label><span>資料の公開年</span><input id="search-year" inputmode="numeric" maxlength="4" value="${esc(searchFilters.year)}"></label><label><span>発言の由来</span><select id="search-origin"><option value="">すべて</option><option value="source">資料の主張</option><option value="user">本人の発言</option><option value="ai">AIの推論</option></select></label></details><button id="privacy">AIと保存について</button><a href="/api/export" download>すべて書き出す</a>
@@ -519,7 +519,7 @@ async function openTheme(themeId,fromCapture=null){
  const r=t.result;
  const sections=[['understanding','現在の暫定理解'],['changes','最近起きている変化'],['competing','競合する説明'],['conditions','成立条件と反例'],['questions','次に確かめたい問い']];
  const proof=e=>{const p=t.evidence.find(p=>p.claim_id===e.claim_id);return p?`<blockquote>${esc(p.quote||'AIの推論・原文引用なし')}<p class="subtle">${esc(({source:'資料の主張',user:'本人の発言',ai:'AIの推論'})[p.origin])} · ${esc(p.source_title||'出典未確認')}${p.page?` · p.${esc(p.page)}`:''} · ${esc(({support:'説明の支持',counterexample:'反例',condition:'条件追加',example:'具体例',background:'背景',unresolved:'未解決'})[e.role])}</p><a href="#" data-theme-source="${esc(p.capture_id)}">原記録を読む</a></blockquote>`:'';};
- app.innerHTML=`${header()}<nav class="theme-nav"><button id="back" class="back">← 育てている問い</button>${fromCapture?'<button id="theme-origin-back" class="back">← 元の記録</button>':''}</nav><article><div class="detail-head"><h1>${esc(t.theme.question)}</h1>${t.stale?'<p class="status">原根拠が変更・削除されています。以下は更新前の理解です。有効な引用だけを表示しています。</p>':''}${t.job&&['failed','blocked'].includes(t.job.state)?`<p class="subtle">${esc(errors[t.job.error_code]||'整理を完了できませんでした。原資料と以前の理解は保存されています。')}</p>`:''}</div>
+ app.innerHTML=`${header(true,false)}<nav class="theme-nav"><button id="back" class="back">← 育てている問い</button>${fromCapture?'<button id="theme-origin-back" class="back">← 元の記録</button>':''}</nav><article><div class="detail-head"><h1>${esc(t.theme.question)}</h1>${t.stale?'<p class="status">原根拠が変更・削除されています。以下は更新前の理解です。有効な引用だけを表示しています。</p>':''}${t.job&&['failed','blocked'].includes(t.job.state)?`<p class="subtle">${esc(errors[t.job.error_code]||'整理を完了できませんでした。原資料と以前の理解は保存されています。')}</p>`:''}</div>
  ${r?sections.map(([key,label])=>r[key].length?`<section class="detail-section">${key==='understanding'?'':`<h2>${label}</h2>`}${r[key].map(e=>`<p class="prose">${esc(e.text)}</p><details class="fold"><summary>根拠</summary><p class="subtle">${e.interpretation==='ai'?'AIの仮説・整理':e.interpretation==='user'?'本人の発言':'資料が述べる説明'}${e.period?` · 対象時期 ${esc(e.period)}`:''}</p>${e.evidence.map(proof).join('')||'<p>現時点で有効な原根拠を確認できません。</p>'}</details>`).join('')}</section>`:'').join(''):''}
  ${r?.changed&&r?.change_reason?`<section class="detail-section"><h2>今回の理解の変化</h2><p>${esc(r.change_reason)}</p></section>`:''}
  ${t.history.length?`<details class="fold"><summary>理解が変わった理由</summary>${t.history.map(h=>`<p>第${h.version}版 · ${date(h.created_at)}<br>${esc(h.change_reason)}</p>`).join('')}</details>`:''}
