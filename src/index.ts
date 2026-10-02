@@ -3,7 +3,7 @@ import {suggestRelations,saveRelation,removeOpposition} from './question-relatio
 import {drilldown,saveDrilldown,addDrilldownCandidate} from './drilldown.ts';
 import {callBook} from './book-operations.ts';
 import {readDiscovery,latestDiscovery,integrateRecords} from './discovery.ts';
-import {automaticAI} from './ai-policy.ts';
+import {automaticAI,authorizeAI} from './ai-policy.ts';
 import {themeContext,saveAnalysis,rebuildTheme,discover} from './book-actions.ts';
 import {listThemes,readTheme,captureThemes,actThemeProposal,themeMigrationStatus,manageThemeMigration,editTheme,deleteTheme,overrideTheme,mergeTheme} from './themes.ts';
 import {aiConfigured,chatgptStatus,disconnectChatgpt} from './chatgpt.ts';
@@ -276,7 +276,7 @@ export async function route(request:Request,env:Env,ctx:ExecutionContext,trusted
  if(path==='/api/captures'&&method==='POST'){
   const saved=await saveCapture(request,env);ctx.waitUntil(dispatch(env));return saved;
  }
- const match=/^\/api\/captures\/([a-f0-9-]{36})(?:\/(assets|retry|adopt|ask|proposal|hide))?$/.exec(path);
+ const match=/^\/api\/captures\/([a-f0-9-]{36})(?:\/(assets|analyze|retry|adopt|ask|proposal|hide))?$/.exec(path);
  if(match){
   const [,captureId,action]=match;
   if(!action&&method==='GET'){const c=await getCapture(env,captureId);if(!c)fail(404,'記録が見つかりません。');return json({...c,membership_job:await stmt(env,"SELECT id,version,state,error_code FROM theme_jobs WHERE kind='membership' AND target_id=? AND version=?",c.id,c.version).first(),themes:await captureThemes(env,c.id),graph:await readGraph(env,c.id,c.version),import_ref:await stmt(env,'SELECT i.job_id,i.ordinal,i.locator,j.name FROM import_items i JOIN import_jobs j ON j.id=i.job_id WHERE i.capture_id=?',c.id).first(),bibliography:c.source_bibliography?JSON.parse(c.source_bibliography):null});}
@@ -295,6 +295,13 @@ export async function route(request:Request,env:Env,ctx:ExecutionContext,trusted
    if(!discovery&&!allowed.includes(key))fail(400,'表示中の案を選んでください。');
    await stmt(env,"INSERT OR REPLACE INTO graph_overrides(capture_id,item_key,action,created_at) SELECT ?,?,'hidden',? WHERE EXISTS(SELECT 1 FROM captures WHERE id=? AND version=?)",c.id,discovery?.item_key||key,now(),c.id,c.version).run();return json({ok:true});
   }
+  if(action==='analyze'&&method==='POST'){
+   const input=await jsonBody(request.clone()),c=await getCapture(env,captureId);if(!c)fail(404,'記録が見つかりません。');
+   const v=version(input.version);if(c.version!==v)fail(409,'記録が更新されています。開き直してください。');
+   await authorizeAI(env,'harvest',captureId,v);
+   await stmt(env,`UPDATE jobs SET state='pending',attempts=0,error_code=NULL,available_at=?,dispatched_at=NULL,lease_token=NULL WHERE capture_id=? AND version=? AND state IN('pending','blocked','failed')`,now(),captureId,v).run();
+   ctx.waitUntil(dispatch(env));return json({ok:true},202);
+  }
   if(action==='ask'&&method==='POST'){
    const input=await jsonBody(request.clone()),c=await getCapture(env,captureId);
    if(!c?.harvest)fail(409,'読み取りが完了した記録から質問してください。');
@@ -306,9 +313,9 @@ export async function route(request:Request,env:Env,ctx:ExecutionContext,trusted
    return json({...result,capture_id:c.id,capture_version:c.version});
   }
   if(action==='retry'&&method==='POST'){
-   const input=await jsonBody(request.clone());
+   const input=await jsonBody(request.clone()),v=version(input.version);await authorizeAI(env,'harvest',captureId,v);
    const change=await stmt(env,`UPDATE jobs SET state='pending',attempts=0,error_code=NULL,available_at=?,dispatched_at=NULL
-    WHERE capture_id=? AND version=? AND version=(SELECT version FROM captures WHERE id=?) AND state IN('blocked','failed')`,now(),captureId,version(input.version),captureId).run();
+    WHERE capture_id=? AND version=? AND version=(SELECT version FROM captures WHERE id=?) AND state IN('blocked','failed')`,now(),captureId,v,captureId).run();
    if(!change.meta.changes)fail(409,'記録が更新されたか、処理中です。');ctx.waitUntil(dispatch(env));return json({ok:true});
   }
  }
