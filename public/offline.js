@@ -1,5 +1,7 @@
 // Originals in the outbox are independent of the evictable reading cache.
 const DB_NAME='book-harvester-device',VERSION=1,MAX_OUTBOX=50*1024*1024,MAX_CACHE=20*1024*1024;
+let deviceAuthMethod=null;
+export function setDeviceAuthMethod(method){deviceAuthMethod=method;}
 let opening,activeScope=null,unlocked=false,flushing=null,lastAutoFlush=0;
 const sizeOf=value=>value instanceof Blob?value.size:typeof value==='string'?value.length*2:JSON.stringify(value).length*2;
 export function deviceDb(){if(!opening)opening=new Promise((resolve,reject)=>{if(!globalThis.indexedDB)return reject(Error('端末保存に対応していません。通信がある状態でお使いください。'));const request=indexedDB.open(DB_NAME,VERSION);request.onupgradeneeded=()=>{const db=request.result;for(const [name,keyPath] of [['meta','key'],['responses','key'],['outbox','id']])if(!db.objectStoreNames.contains(name))db.createObjectStore(name,{keyPath});};request.onerror=()=>reject(Error('端末の保存領域を開けません。未送信データは削除していません。'));request.onblocked=()=>reject(Error('別の画面が端末保存の更新を待っています。他の画面を閉じて開き直してください。'));request.onsuccess=()=>{const db=request.result;db.onversionchange=()=>{db.close();opening=null;};resolve(db);};});return opening;}
@@ -29,7 +31,7 @@ async function raw(path,options={}){
  const redirectedToAccess=response.redirected&&new URL(response.url).origin!==location.origin;
  let data;try{data=await response.json();}catch{data=null;}
  if(!response.ok||redirectedToAccess||!data){
-  const e=Error(data?.error||'通信を確認してください。');e.status=redirectedToAccess?401:response.status;
+  const e=Error(data?.error||'通信を確認してください。');if(redirectedToAccess)e.status=401;else if(!response.ok)e.status=response.status;
   if([401,403].includes(e.status)){await lockDevice();if(path!=='/api/login')window.dispatchEvent(new CustomEvent('device-auth-expired',{detail:e}));}
   throw e;
  }
@@ -46,7 +48,7 @@ async function overlay(path,data){
  if(path.startsWith('/api/state')){const pending=await pendingOperations(),allPending=await all('outbox'),locals=pending.filter(o=>o.path==='/api/captures').map(localCapture),tombstones=new Set(pending.filter(o=>o.method==='DELETE').map(o=>o.path.split('/').at(-1)));return {...data,captures:[...locals.map(c=>({...c,original_preview:c.original_text.slice(0,100),state:'local'})),...data.captures.filter(c=>!tombstones.has(c.id))],device:{offline:!navigator.onLine,pending:pending.length,conflicts:pending.filter(o=>o.state==='conflict').length,other_scope:allPending.length-pending.length}};}return data;}
 export async function deviceRequest(path,options={}){
  await initialise();const method=options.method||'GET';
- const needsLogin=await get('meta','require-login');if(needsLogin?.value&&path!=='/api/login'&&path!=='/api/logout'&&!(method==='GET'&&path.startsWith('/api/state'))){const e=Error('もう一度開いてください。未送信の原資料は端末に残っています。');e.status=401;throw e;}
+ const needsLogin=await get('meta','require-login');if(needsLogin?.value&&path!=='/api/login'&&path!=='/api/logout'&&!(deviceAuthMethod==='cloudflare_access'&&method==='GET'&&path.startsWith('/api/state'))){const e=Error('もう一度開いてください。未送信の原資料は端末に残っています。');e.status=401;throw e;}
  if(path==='/api/logout'){let result;try{result=await raw(path,options);}catch(e){if(e.status)throw e;}await lockDevice();await put('meta',{key:'require-login',value:true});return result||{ok:true};}
  const local=/^\/api\/captures\/(local-[a-f0-9-]{36})$/.exec(path);
  if(local){const alias=await get('meta',`alias:${local[1]}`);if(alias?.scope===activeScope)path=`/api/captures/${alias.id}`;else{const op=await get('outbox',local[1].slice(6));if(!op||op.scope!==activeScope||!unlocked)throw Error('この端末記録が見つかりません。');if(method==='GET')return localCapture(op);if(method==='DELETE'){await discardOperation(op.id);return {ok:true};}throw Error('端末だけの記録です。同期してから訂正・補足できます。');}}

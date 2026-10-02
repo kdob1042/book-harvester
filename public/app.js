@@ -1,4 +1,4 @@
-import {deviceRequest,initDevice,cacheRecent,pendingOperations,discardOperation,clearReadingCache,exportDevice,discardAllOutbox,resolveConflict,resume,lockDevice,deviceSettings,setDeviceSettings} from './offline.js';
+import {setDeviceAuthMethod,deviceRequest,initDevice,cacheRecent,pendingOperations,discardOperation,clearReadingCache,exportDevice,discardAllOutbox,resolveConflict,resume,lockDevice,deviceSettings,setDeviceSettings} from './offline.js';
 const app = document.querySelector('#app');
 const dialog = document.querySelector('#dialog');
 const notice = document.querySelector('#notice');
@@ -80,7 +80,7 @@ function wireHeader() {
 
 async function home() {
   const next = await api(searchPath());
-  authMethod = next.auth_method;
+  authMethod = next.auth_method; setDeviceAuthMethod(authMethod);
   state = next; currentCapture = null; currentView = null;
   app.innerHTML = `${header()}<section class="intro"><p class="eyebrow">READ · LEAVE · THINK</p>
     <h1>理解を育てる。</h1><p>${state.current_source ? `${esc(state.current_source.title)}<br>前回の本を引き継ぎます。表紙を残すと、本も切り替わります。` : '本の一節も、自分の気づきも。<br>記録から、同じ問いの理解が育ちます。'}</p></section><section id="feed"></section>`;
@@ -429,10 +429,13 @@ async function start(){
     if(!response.ok)throw Error('Authentication configuration unavailable');
     const config=await response.json();
     if(!['password','cloudflare_access'].includes(config.auth_method))throw Error('Unknown authentication mode');
-    authMethod=config.auth_method;
+    authMethod=config.auth_method; setDeviceAuthMethod(authMethod);
+    try{localStorage.setItem('book-auth-method',authMethod);}catch{}
   }catch(error){
     // An offline reading cache can still open; unknown mode never renders a password form.
     if(navigator.onLine)throw error;
+    try{authMethod=localStorage.getItem('book-auth-method');}catch{}
+    setDeviceAuthMethod(authMethod);
   }
   await home();
 }
