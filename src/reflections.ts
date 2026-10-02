@@ -77,7 +77,7 @@ export async function processReflection(env:Env,jobId:string,fetcher?:typeof fet
   for(const v of input.view_changes){guard+=' AND EXISTS(SELECT 1 FROM view_revisions WHERE view_id=? AND version=?)';args.push(v.id,v.version);}
   for(const r of input.relations){guard+=' AND EXISTS(SELECT 1 FROM current_graph_relations WHERE id=?)';args.push(r.id);}
   await env.DB.batch([
-   stmt(env,`INSERT INTO reflections(id,scope,scope_key,signature,result,input_json,model,processing_version,created_at) SELECT ?,?,?,?,?,?,?,?,? WHERE ${guard}`,id(),job.scope,job.scope_key,job.signature,JSON.stringify(output),job.input_json,env.OPENAI_MODEL,'reflection-v1',now(),...args),
+   stmt(env,`INSERT INTO reflections(id,scope,scope_key,signature,result,input_json,model,processing_version,created_at) SELECT ?,?,?,?,?,?,?,?,? WHERE ${guard}`,id(),job.scope,job.scope_key,job.signature,JSON.stringify(output),job.input_json,data.model||env.OPENAI_MODEL,'reflection-v1',now(),...args),
    stmt(env,`UPDATE reflection_jobs SET state='completed',error_code=NULL,lease_token=NULL WHERE id=? AND signature=? AND lease_token=? AND ${guard}`,job.id,job.signature,token,...args),
   ]);
  }catch(e){const safe=e instanceof AiError?e:new AiError('reflection_failed');const blocked=['ai_not_configured','daily_limit','subscription_reauth_required','subscription_sharing_usage_limit_exceeded','subscription_audio_unsupported'].includes(safe.code),tomorrow=new Date();tomorrow.setUTCHours(24,0,0,0);
