@@ -1,4 +1,6 @@
 export const toolSpecs = [
+ ['get_discovery','Read saved related candidates without AI','book:read',{id:{type:'string'}}],
+ ['integrate_records','Integrate only the anchor, selected saved candidates and retained valid evidence','book:write',{discovery_id:{type:'string'},selected_ids:{type:'array',items:{type:'string'}},idempotency_key:{type:'string'}}],
  ['get_status','Read implementation capabilities and processing status','book:read',{}],
  ['search_records','Search all saved records without AI. Cursor pagination covers the entire history.','book:read',{query:{type:'string'},entity:{type:'string',enum:['all','capture','claim','concept','question','view','theme']},theme_id:{type:'string'},source:{type:'string'},origin:{type:'string',enum:['source','user','ai']},state:{type:'string'},since:{type:'integer',minimum:0},until:{type:'integer',minimum:0},unorganized:{type:'boolean'},include_hidden:{type:'boolean'},cursor:{type:'integer',minimum:0},limit:{type:'integer',minimum:1,maximum:50}}],
  ['get_record','Read a record, evidence, and graph','book:read',{id:{type:'string'}}],
@@ -51,6 +53,8 @@ export const toolSpecs = [
 export const required:Record<string,string[]>={get_record:['id'],save_capture:['text','idempotency_key'],revise_capture:['id','version','idempotency_key'],adopt_view:['id','version','idempotency_key'],get_view:['id'],revise_view:['id','version','body','reason','idempotency_key'],get_relations:['id'],get_job:['id','kind'],retry_job:['id','kind','idempotency_key'],start_research:['question','idempotency_key'],cancel_job:['id','idempotency_key'],preview_delete:['id','version'],delete_capture:['id','version','confirmation','idempotency_key'],get_theme:['id'],get_theme_context:['id'],get_history:['id'],revise_theme:['id','version','idempotency_key'],manage_migration:['action','idempotency_key']};
 
 required["save_analysis_draft"]=["id", "version", "context_token", "body", "idempotency_key"];
+required["get_discovery"]=["id"];
+required["integrate_records"]=["discovery_id","selected_ids","idempotency_key"];
 required["discover_relations"]=["id", "version", "idempotency_key"];
 required["rebuild_theme"]=["id", "version", "idempotency_key"];
 required["restore_view"]=["id", "version", "restore_version", "idempotency_key"];

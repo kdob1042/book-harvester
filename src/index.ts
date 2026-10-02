@@ -1,4 +1,5 @@
 import {callBook} from './book-operations.ts';
+import {readDiscovery,latestDiscovery,integrateRecords} from './discovery.ts';
 import {automaticAI} from './ai-policy.ts';
 import {themeContext,saveAnalysis,rebuildTheme,discover} from './book-actions.ts';
 import {listThemes,readTheme,captureThemes,actThemeProposal,themeMigrationStatus,manageThemeMigration,editTheme,overrideTheme,mergeTheme} from './themes.ts';
@@ -189,7 +190,7 @@ function exportData(env:Env){
  const stream=new ReadableStream<Uint8Array>({async start(controller){
   try{
    controller.enqueue(encoder.encode(`{"format":"book-harvester/v1","exported_at":${JSON.stringify(new Date().toISOString())}`));
-   for(const table of ['sources','captures','capture_revisions','harvests','answers','views','view_revisions','asset_transcripts','assets','graph_jobs','graph_generations','graph_nodes','concepts','concept_mentions','graph_relations','graph_dependencies','view_proposals','graph_overrides','reading_sessions','reading_session_members','reflection_jobs','reflections','revisit_state','import_jobs','import_items','bibliography_jobs','research_runs','research_materials','external_source_index','embeddings','embedding_jobs','concept_overrides','concept_edits','capture_tombstones','sync_events','domains','lenses','themes','theme_domains','theme_memberships','theme_revisions','theme_syntheses','synthesis_evidence','theme_claim_relations','theme_relations','theme_view_links','theme_overrides','theme_proposals','theme_history','theme_dependencies','theme_member_lenses','theme_analysis_drafts','theme_changes','capture_visibility']){
+   for(const table of ['discovery_runs','integration_runs','sources','captures','capture_revisions','harvests','answers','views','view_revisions','asset_transcripts','assets','graph_jobs','graph_generations','graph_nodes','concepts','concept_mentions','graph_relations','graph_dependencies','view_proposals','graph_overrides','reading_sessions','reading_session_members','reflection_jobs','reflections','revisit_state','import_jobs','import_items','bibliography_jobs','research_runs','research_materials','external_source_index','embeddings','embedding_jobs','concept_overrides','concept_edits','capture_tombstones','sync_events','domains','lenses','themes','theme_domains','theme_memberships','theme_revisions','theme_syntheses','synthesis_evidence','theme_claim_relations','theme_relations','theme_view_links','theme_overrides','theme_proposals','theme_history','theme_dependencies','theme_member_lenses','theme_analysis_drafts','theme_changes','capture_visibility']){
     controller.enqueue(encoder.encode(`,${JSON.stringify(table)}:[`));let offset=0,first=true;
     while(true){
      const records=await rows<Record<string,unknown>>(env,`SELECT * FROM ${table} ORDER BY rowid LIMIT 50 OFFSET ?`,offset);
@@ -233,6 +234,8 @@ export async function route(request:Request,env:Env,ctx:ExecutionContext,trusted
  if(!path.startsWith('/api/'))return env.ASSETS.fetch(request);
  if(!trustedService&&!env.ACCESS_AUD&&!await loggedIn(request,env))fail(401,'ログインしてください。');
  const replay=await replayReceipt(env,request);if(replay)return json(replay);
+ if(path==='/api/book/integrate'&&method==='POST')return json(await integrateRecords(env,await jsonBody(request.clone())));
+ if(path==='/api/book/discovery'&&method==='GET')return json(url.searchParams.has('id')?await readDiscovery(env,url.searchParams.get('id')!):await latestDiscovery(env,url.searchParams.get('anchor')!));
  if(path==='/api/book/discover'&&method==='POST')return json(await callBook(env,ctx,'discover_relations',await jsonBody(request.clone())),202);
  const themeAction=/^\/api\/themes\/([^/]+)\/(context|analysis|rebuild)$/.exec(path);if(themeAction){const a={...await (method==='GET'?Promise.resolve({}):jsonBody(request.clone())),id:decodeURIComponent(themeAction[1])};if(themeAction[2]==='context'&&method==='GET')return json(await themeContext(env,a.id));if(themeAction[2]==='analysis'&&method==='POST')return json(await callBook(env,ctx,'save_analysis_draft',a),201);if(themeAction[2]==='rebuild'&&method==='POST')return json(await callBook(env,ctx,'rebuild_theme',a),202);}
  if(path==='/api/theme-changes'&&method==='POST')return json(await callBook(env,ctx,'propose_theme_change',await jsonBody(request.clone())),201);

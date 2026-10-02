@@ -1,3 +1,4 @@
+import {readDiscovery,integrateRecords} from './discovery.ts';
 import {overview,recordEvidence,history,themeRelations} from './book-reads.ts';
 import {readBookJob,changeBookJob,jobStages} from './book-jobs.ts';
 import {setVisibility} from './book-visibility.ts';
@@ -29,6 +30,8 @@ async function executeBook(env:Env,ctx:ExecutionContext,name:string,a:Record<str
   if(name==='save_view_proposal')return saveViewProposal(env,a);
   if(name==='save_analysis_draft')return saveAnalysis(env,a);
   if(name==='rebuild_theme')return rebuildTheme(env,ctx,a);
+  if(name==='get_discovery')return readDiscovery(env,String(a.id));
+  if(name==='integrate_records')return integrateRecords(env,a);
   if(name==='discover_relations')return discover(env,ctx,a);
   if(name==='export_records')return exportRecords(env,a);
   const rid=String(a.id||'');if(a.id&&!['get_theme','get_theme_context','get_history','revise_theme','correct_membership','adopt_theme_view','merge_theme'].includes(name)&&!/^[a-f0-9-]{36}$/.test(rid))fail(400,'invalid_id');
