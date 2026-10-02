@@ -6,6 +6,17 @@ import {dispatch,processJob} from '../src/queue.ts';
 const key=n=>`fixture-request-${String(n).padStart(8,'0')}`;
 async function save(f,body=photo(),n=1){const response=await f.request('/api/captures',{method:'POST',headers:{'Idempotency-Key':key(n)},body});assert.equal(response.status,201);return (await response.json()).id;}
 
+
+test('explicit AI policy never analyzes a saved record until the user requests extraction',async t=>{
+ const f=await fixture({policy:'explicit'});t.after(f.close);await f.login();const captureId=await save(f);await f.settle();
+ let c=await (await f.request(`/api/captures/${captureId}`)).json();
+ assert.equal(c.harvest,null);assert.equal(c.job.state,'blocked');assert.equal(c.ai_authorized,false);assert.equal(f.messages.length,0);
+ assert.equal(f.db.prepare('SELECT count(*) AS n FROM ai_calls').get().n,0);
+ const started=await f.request(`/api/captures/${captureId}/extract`,json('POST',{version:1}));assert.equal(started.status,202);await f.drain();
+ c=await (await f.request(`/api/captures/${captureId}`)).json();
+ assert.equal(c.job.state,'completed');assert.equal(c.ai_authorized,true);assert.ok(c.harvest);assert.equal(f.db.prepare('SELECT count(*) AS n FROM reflection_jobs').get().n,0);
+});
+
 test('photo -> saved job -> closed browser -> harvest -> adopt -> edit/restore -> original export',async t=>{
  const f=await fixture();t.after(f.close);await f.login();const captureId=await save(f);
  let c=await (await f.request(`/api/captures/${captureId}`)).json();assert.equal(c.harvest,null);assert.equal(c.job.state,'pending');assert.equal(c.assets.length,1);
@@ -47,7 +58,7 @@ test('missing key and API failure preserve originals; queue-send failure is reco
  let c=await (await f.request(`/api/captures/${captureId}`)).json();assert.equal(c.job.state,'blocked');assert.equal(c.job.error_code,'ai_not_configured');assert.equal(f.objects.size,1);
  f.env.OPENAI_API_KEY='fixture-key';await dispatch(f.env);
  await f.drain(async()=>new Response('rejected',{status:401}));c=await (await f.request(`/api/captures/${captureId}`)).json();assert.equal(c.job.state,'failed');assert.equal(c.harvest,null);assert.equal(f.objects.size,1);
- assert.equal((await f.request(`/api/captures/${captureId}/retry`,json('POST',{version:1}))).status,200);await f.drain();
+ assert.equal((await f.request(`/api/captures/${captureId}/retry`,json('POST',{version:1}))).status,202);await f.drain();
  c=await (await f.request(`/api/captures/${captureId}`)).json();assert.equal(c.job.state,'completed');
 });
 

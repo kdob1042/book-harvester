@@ -1,5 +1,5 @@
 import {retrieveExternal} from './external.ts';
-import {automaticAI} from './ai-policy.ts';
+import {automaticAI,allowedAI} from './ai-policy.ts';
 import {membershipJobStatement,dispatchThemes,processThemeJob} from './themes.ts';
 import {aiConfigured} from './chatgpt.ts';
 import {scheduleEmbedding,dispatchEmbeddings,processEmbedding} from './semantic.ts';
@@ -17,8 +17,9 @@ export async function dispatch(env:Env) {
   stmt(env,`UPDATE jobs SET state=CASE WHEN attempts>=3 THEN 'failed' ELSE 'pending' END,error_code='worker_interrupted',dispatched_at=NULL,lease_token=NULL WHERE state='running' AND lease_until<?`,time),
   stmt(env,`UPDATE jobs SET state='pending',error_code=NULL,dispatched_at=NULL,available_at=? WHERE state='blocked' AND (?=1 AND (error_code='ai_not_configured' OR (error_code IN ('daily_limit','subscription_sharing_usage_limit_exceeded') AND available_at<=?)))`,time,aiConfigured(env)?1:0,time),
  ]);
- const jobs=await rows<Job>(env,`SELECT * FROM jobs WHERE state='pending' AND available_at<=? AND (dispatched_at IS NULL OR dispatched_at<?) ORDER BY created_at LIMIT 50`,time,time-300000);
+ const jobs=await rows<Job>(env,`SELECT * FROM jobs WHERE state='pending' AND (?=1 OR EXISTS(SELECT 1 FROM explicit_ai_actions a WHERE a.kind='extract' AND a.target_id=jobs.capture_id AND a.version=jobs.version)) AND available_at<=? AND (dispatched_at IS NULL OR dispatched_at<?) ORDER BY created_at LIMIT 50`,automaticAI(env)?1:0,time,time-300000);
  for(const job of jobs){
+  if(!await allowedAI(env,'extract',job.capture_id,job.version))continue;
   const claim=await stmt(env,`UPDATE jobs SET dispatched_at=? WHERE id=? AND state='pending' AND (dispatched_at IS NULL OR dispatched_at<?) RETURNING id`,time,job.id,time-300000).first();
   if(!claim)continue;
   try{await env.HARVEST_QUEUE.send({job_id:job.id},{contentType:'json'});}
@@ -34,6 +35,7 @@ export async function dispatch(env:Env) {
 }
 
 export async function processJob(env:Env,jobId:string,fetcher?:typeof fetch) {
+ const permit=await stmt(env,'SELECT capture_id,version FROM jobs WHERE id=?',jobId).first<{capture_id:string;version:number}>();if(!permit||!await allowedAI(env,'extract',permit.capture_id,permit.version))return;
  const token=id(),time=now();
  const job=await stmt(env,`UPDATE jobs SET state='running',attempts=attempts+1,lease_token=?,lease_until=?,model=?,prompt_version='harvest-v1'
  WHERE id=? AND state='pending' AND available_at<=? RETURNING *`,token,time+300000,env.OPENAI_MODEL,jobId,time).first<Job>();
@@ -41,7 +43,7 @@ export async function processJob(env:Env,jobId:string,fetcher?:typeof fetch) {
  const capture=await getCapture(env,job.capture_id);
  if(!capture||capture.version!==job.version){await stmt(env,"UPDATE jobs SET state='superseded',lease_token=NULL WHERE id=? AND lease_token=?",job.id,token).run();return;}
  try{
-  if(!await stmt(env,"SELECT 1 FROM explicit_ai_actions WHERE kind='extract' AND target_id=? AND version=?",capture.id,capture.version).first())throw new AiError('extraction_required');
+  if(!automaticAI(env)&&!await stmt(env,"SELECT 1 FROM explicit_ai_actions WHERE kind='extract' AND target_id=? AND version=?",capture.id,capture.version).first())throw new AiError('extraction_required');
   let transcript=job.transcript||'';
   if(!transcript&&/^https?:\/\/\S+$/.test(capture.original_text)&&!capture.corrected_text){
    const material=await retrieveExternal(env,capture.original_text,fetcher);
@@ -71,10 +73,18 @@ export async function processJob(env:Env,jobId:string,fetcher?:typeof fetch) {
    statements.push(stmt(env,`INSERT OR REPLACE INTO settings(key,value) SELECT 'current_source',source_id FROM captures WHERE id=? AND source_locked=0 AND id=(SELECT id FROM captures ORDER BY created_at DESC,rowid DESC LIMIT 1) AND ${guard}`,capture.id,job.id,token));
   }
   statements.push(stmt(env,`UPDATE captures SET page=?,chapter=?,locator_certainty=? WHERE id=? AND source_locked=0 AND ${guard}`,source.page,source.chapter,source.certainty,capture.id,job.id,token));
+  if(automaticAI(env))statements.push(graphJobStatement(env,capture.id,job.version,guard,[job.id,token]),membershipJobStatement(env,capture.id,job.version,guard,[job.id,token]));
   statements.push(stmt(env,`UPDATE jobs SET state=CASE WHEN version=(SELECT version FROM captures WHERE id=?) THEN 'completed' ELSE 'superseded' END,
-   error_code=NULL,input_tokens=?,output_tokens=?,finished_at=?,lease_token=NULL WHERE id=? AND state='running' AND lease_token=?`,capture.id,output.usage.input_tokens||0,output.usage.output_tokens||0,now(),job.id,token));
+   error_code=NULL,model=?,input_tokens=?,output_tokens=?,finished_at=?,lease_token=NULL WHERE id=? AND state='running' AND lease_token=?`,capture.id,output.model,output.usage.input_tokens||0,output.usage.output_tokens||0,now(),job.id,token));
   await env.DB.batch(statements);
-
+  if(automaticAI(env)){
+  await scheduleReflections(env,capture.id);
+  await scheduleBibliography(env,capture.id,job.version);
+  await scheduleEmbedding(env,capture.id,job.version);
+  await dispatchEmbeddings(env);
+  await dispatchGraph(env);
+  await dispatchThemes(env);
+  }
  }catch(e){
   const safe=e instanceof AiError?e:new AiError('processing_failed'),blocked=['extraction_required','ai_not_configured','daily_limit','subscription_reauth_required','subscription_sharing_usage_limit_exceeded','subscription_audio_unsupported'].includes(safe.code);
   const next=blocked?'blocked':safe.retryable&&job.attempts<3?'pending':'failed';

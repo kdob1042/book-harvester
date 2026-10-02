@@ -1,6 +1,6 @@
 import {test} from 'node:test';import assert from 'node:assert/strict';
 import {fixture,sentence} from './helpers.js';import {callBook} from '../src/book-operations.ts';
-async function capture(f,key='theme-test-capture-01'){const c=await callBook(f.env,f.ctx,'save_capture',{text:sentence,source:'供給のしくみ',idempotency_key:key});await f.drain();return c.data.id;}
+async function capture(f,key='theme-test-capture-01'){const c=await callBook(f.env,f.ctx,'save_capture',{text:sentence,source:'供給のしくみ',idempotency_key:key});await callBook(f.env,f.ctx,'extract_record',{id:c.data.id,version:1,idempotency_key:key+'-extract'});await f.drain();return c.data.id;}
 function membership(f,theme,cap){f.db.prepare("INSERT INTO theme_memberships VALUES(?,?,1,'[\"c1\"]','fixture','condition','fingerprint','fixture',1)").run(theme,cap);}
 test('theme edit preview does not mutate; apply and undo create versions and immutable history',async()=>{
  const f=await fixture();f.env.AI_EXECUTION_POLICY='explicit';const original=f.db.prepare("SELECT question FROM themes WHERE id='theme:work'").get().question;

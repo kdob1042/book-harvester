@@ -36,4 +36,4 @@ try{
  if(loginCalls!==0)throw Error('Access mode called password API');
  console.log('Auth browser passed: initial 401/403 HTML, Access logout/reentry, device expiry, retained Blob/outbox, local password login.');
  await context.close();
-}finally{await browser.close();await new Promise(r=>server.close(r));await f.close();}
+}finally{await browser.close();server.closeAllConnections();await new Promise(r=>server.close(r));await f.close();}

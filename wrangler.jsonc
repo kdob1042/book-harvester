@@ -20,7 +20,8 @@
     "AI_DAILY_CALL_LIMIT": "60",
     "AI_MAX_OUTPUT_TOKENS": "4000",
     "RESEARCH_ALLOWED_HOSTS": "",
-    "OPENAI_RESEARCH_MODEL": "gpt-4.1-mini"
+    "OPENAI_RESEARCH_MODEL": "gpt-4.1-mini",
+    "AI_EXECUTION_POLICY": "explicit"
   },
   "d1_databases": [
     {

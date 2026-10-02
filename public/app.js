@@ -1,4 +1,4 @@
-import {deviceRequest,initDevice,cacheRecent,pendingOperations,discardOperation,clearReadingCache,exportDevice,discardAllOutbox,resolveConflict,resume,lockDevice,deviceSettings,setDeviceSettings} from './offline.js';
+import {setDeviceAuthMethod,deviceRequest,initDevice,cacheRecent,pendingOperations,discardOperation,clearReadingCache,exportDevice,discardAllOutbox,resolveConflict,resume,lockDevice,deviceSettings,setDeviceSettings} from './offline.js';
 const app = document.querySelector('#app');
 const dialog = document.querySelector('#dialog');
 const notice = document.querySelector('#notice');
@@ -8,13 +8,14 @@ const $ = selector => document.querySelector(selector);
 let state, currentCapture = null, currentView = null, query = '', recorder = null, stream = null, uploading = false, uploadPending = null;
 let searchFilters={source:'',year:'',origin:''};
 const searchPath=()=>`/api/state?q=${encodeURIComponent(query)}&source=${encodeURIComponent(searchFilters.source)}&year=${encodeURIComponent(searchFilters.year)}&origin=${encodeURIComponent(searchFilters.origin)}`;
-let noticeTimer, searchTimer, pollBusy = false;
+let noticeTimer, searchTimer, pollBusy = false, authMethod = null, reauthenticating = false;
+let aiForeground = 0, aiRemote = false, aiVisibleUntil = 0, aiPollBusy = false;
 const errors = {
   subscription_reauth_required:'原資料は保存済みです。パソコンから ChatGPT に再接続してください。',
   subscription_sharing_usage_limit_exceeded:'原資料は保存済みです。サブスク枠の回復後に再試行します。',
   subscription_audio_unsupported:'音声は保存済みです。サブスク枠では文字起こしできません。文章の記録から知見化できます。',
-  ai_not_configured:'原資料は保存済みです。AI設定後に自動で読み取ります。',
-  daily_limit:'原資料は保存済みです。今日の解析上限に達しました。明日、自動で続けます。',
+  ai_not_configured:'原資料は保存済みです。AI設定を確認してから、もう一度実行してください。',
+  daily_limit:'原資料は保存済みです。今日の解析上限に達しました。明日以降に再試行してください。',
   invalid_output:'読み取り結果を確認できませんでした。原資料は残っています。',
   empty_transcript:'音声を読み取れませんでした。原音声は残っています。',
   refused:'この資料は解析できませんでした。原資料は残っています。',
@@ -28,12 +29,41 @@ function showNotice(text) {
   clearTimeout(noticeTimer); notice.textContent = text;
   noticeTimer = setTimeout(() => { notice.textContent = ''; }, 4500);
 }
-async function api(path,options={}){try{return await deviceRequest(path,options);}catch(error){if(error.status===401&&path!=='/api/login'){closeDialog();login();}throw error;}}
+const aiRequest = (path,options={}) => {
+  const method=(options.method||'GET').toUpperCase();
+  if(method==='GET')return false;
+  return (/\/extract$/.test(path))||/\/retry$/.test(path)||/\/ask$/.test(path)||path.startsWith('/api/book/integration-proposals')||path==='/api/book/discover'||path==='/api/book/integrate'||/^\/api\/themes\/[^/]+\/rebuild$/.test(path)||path==='/api/research'||path==='/api/theme-changes'||path==='/api/concept-edits';
+};
+function syncAiActivity(){
+  const indicator=$('#ai-activity');if(!indicator)return;
+  indicator.hidden=!(aiForeground>0||aiRemote||Date.now()<aiVisibleUntil);
+}
+async function refreshAiActivity(){
+  if(!state||document.hidden||aiPollBusy)return;
+  aiPollBusy=true;
+  try{const result=await deviceRequest('/api/ai-activity');aiRemote=Boolean(result.active);if(aiRemote)aiVisibleUntil=Math.max(aiVisibleUntil,Date.now()+1400);}
+  catch{/* Advisory only: normal requests surface connectivity errors. */}
+  finally{aiPollBusy=false;syncAiActivity();}
+}
+async function api(path,options={}){
+  const tracked=aiRequest(path,options);
+  if(tracked){aiForeground++;aiVisibleUntil=Math.max(aiVisibleUntil,Date.now()+1400);syncAiActivity();}
+  try{return await deviceRequest(path,options);}
+  catch(error){if([401,403].includes(error.status)&&path!=='/api/login'){closeDialog();login();}throw error;}
+  finally{if(tracked){aiForeground=Math.max(0,aiForeground-1);aiVisibleUntil=Math.max(aiVisibleUntil,Date.now()+1400);syncAiActivity();setTimeout(syncAiActivity,1500);}}
+}
 
 const json = (method, data) => ({ method, headers:{ 'Content-Type':'application/json' }, body:JSON.stringify(data) });
 
 function login() {
-  if(state?.auth_method==='cloudflare_access'){location.assign('/cdn-cgi/access/logout');return;}
+  const method=authMethod||state?.auth_method;
+  if(method!=='password'){
+    if(reauthenticating)return;
+    reauthenticating=true;
+    app.innerHTML='<p class="loading">もう一度ログインして続けてください。未送信の記録は端末に残っています。</p>';
+    app.removeAttribute('aria-busy');
+    location.assign('/cdn-cgi/access/logout');return;
+  }
   currentCapture = null; currentView = null; state = null;
   app.innerHTML = `<div class="login"><p class="eyebrow">BOOK HARVESTER</p><h1>読書の続きを、ここから。</h1>
     <form id="login-form"><label><span>パスワード</span><input id="password" type="password" required autocomplete="current-password"></label>
@@ -47,15 +77,17 @@ function login() {
   });
 }
 
-function header(record = true) {
+function header(record = true, primary = true) {
   return `<header class="top"><div class="brand"><img src="/favicon.svg" alt="">Book Harvester</div><div class="top-actions">
-    ${record ? '<button id="record" class="primary">記録する<span aria-hidden="true">＋</span></button>' : ''}
+    <span id="ai-activity" class="ai-activity" hidden role="status" aria-label="AI処理中" title="AI処理中"><span class="ai-activity-label">AI</span><span class="ai-activity-dots" aria-hidden="true"><i></i><i></i><i></i></span></span>
+    ${record ? `<button id="record" class="${primary?'primary':'quiet'}">記録する<span aria-hidden="true">＋</span></button>` : ''}
     <details class="menu"><summary aria-label="メニュー">···</summary><div class="menu-panel">
     <label><span>記録を検索</span><input id="search" type="search" placeholder="曖昧な言葉でも" value="${esc(query)}"></label>
     <details class="fold"><summary>検索を絞り込む</summary><label><span>本・出典名</span><input id="search-source" value="${esc(searchFilters.source)}"></label><label><span>資料の公開年</span><input id="search-year" inputmode="numeric" maxlength="4" value="${esc(searchFilters.year)}"></label><label><span>発言の由来</span><select id="search-origin"><option value="">すべて</option><option value="source">資料の主張</option><option value="user">本人の発言</option><option value="ai">AIの推論</option></select></label></details><button id="privacy">AIと保存について</button><a href="/api/export" download>すべて書き出す</a>
     <button id="device-menu">端末の保存状況</button><button id="logout">閉じる</button></div></details></div></header>`;
 }
 function wireHeader() {
+  syncAiActivity();
   bind('#record', 'click', () => recordDialog());
   bind('#search', 'input', event => {
     query = event.target.value;
@@ -73,11 +105,11 @@ function wireHeader() {
 
 async function home() {
   const next = await api(searchPath());
+  authMethod = next.auth_method; setDeviceAuthMethod(authMethod);
   state = next; currentCapture = null; currentView = null;
-  app.innerHTML = `${header()}<section class="intro"><p class="eyebrow">READ · LEAVE · THINK</p>
-    <h1>理解を育てる。</h1><p>${state.current_source ? `${esc(state.current_source.title)}<br>前回の本を引き継ぎます。表紙を残すと、本も切り替わります。` : '本の一節も、自分の気づきも。<br>記録から、同じ問いの理解が育ちます。'}</p></section><section id="feed"></section>`;
+  app.innerHTML = `${header()}<section id="feed"></section>`;
   app.removeAttribute('aria-busy'); wireHeader(); renderFeed();
-  cacheRecent(state).catch(()=>{});
+  refreshAiActivity(); cacheRecent(state).catch(()=>{});
 }
 function renderFeed() {
   if (!$('#feed')) return;
@@ -94,6 +126,7 @@ function renderFeed() {
   }).join('')}${!captures.length ? `<div class="empty"><img class="empty-symbol" src="/favicon.svg" alt=""><h2>${query ? 'その言葉は、まだ見つかりません。' : '最初の一枚から、育っていきます。'}</h2><p>${query ? '別の言葉で探してみてください。' : '書名も、ページ番号も、タグも不要です。<br>写真を残したら、本の続きへ。'}</p></div>` : ''}
     ${state.views.length && !query && !state.filter_active ? `<p class="section-label">自分の見方</p>${state.views.map(v => `<button class="view-row" data-view="${v.id}"><span class="row-meta">自分の見方 · 第${v.version}版</span><h2>${esc(v.body)}</h2></button>`).join('')}` : ''}`;
   wireThemeLinks();
+  wireIntegrationProposals();
   bind('#device-pending','click',devicePendingDialog);
   document.querySelectorAll('[data-capture]').forEach(el => el.addEventListener('click', () => openCapture(el.dataset.capture).catch(e => showNotice(e.message))));
   document.querySelectorAll('[data-import]').forEach(el=>el.addEventListener('click',()=>openImport(el.dataset.import).catch(e=>showNotice(e.message))));
@@ -149,7 +182,7 @@ function recordDialog(target = null) {
   const render = () => {
     stopRecorder(); setMode($('#capture-mode').value);
     const selected = $('#capture-mode').value;
-    if(selected==='url'){ $('#capture-body').innerHTML='<form id="url-form"><label><span>公開資料のHTTPS URL</span><input id="source-url" type="url" required></label><p class="subtle">許可済みの一次資料サイトから取得します。本文の取得・知見化に通常2回のAI処理を使います。</p><p id="url-error" class="error"></p><button class="primary">残す</button></form>';bind('#url-form','submit',async e=>{e.preventDefault();try{const r=await api('/api/research',{...json('POST',{url:$('#source-url').value}),headers:{'Content-Type':'application/json','Idempotency-Key':crypto.randomUUID()}});closeDialog();if(r.local){await home();showNotice('調査依頼を端末に保存しました。接続後に開始します。');}else await openResearch(r.id);}catch(err){$('#url-error').textContent=err.message;}});return;}
+    if(selected==='url'){ $('#capture-body').innerHTML='<form id="url-form"><label><span>公開資料のHTTPS URL</span><input id="source-url" type="url" required></label><p class="subtle">許可済みの一次資料サイトから本文を取得して保存します。AI抽出は保存後に明示的に実行します。</p><p id="url-error" class="error"></p><button class="primary">残す</button></form>';bind('#url-form','submit',async e=>{e.preventDefault();try{const r=await api('/api/research',{...json('POST',{url:$('#source-url').value}),headers:{'Content-Type':'application/json','Idempotency-Key':crypto.randomUUID()}});closeDialog();if(r.local){await home();showNotice('調査依頼を端末に保存しました。接続後に開始します。');}else await openResearch(r.id);}catch(err){$('#url-error').textContent=err.message;}});return;}
     $('#capture-error').textContent = '';
     if (selected === 'image') {
       $('#capture-body').innerHTML = `<input id="image-file" type="file" accept="image/jpeg,image/png,image/webp" ${target?'':'multiple'}><button id="pick-image" class="primary">ページを撮る・選ぶ</button><p>表紙や扉の写真から、本も読み取ります。<br>JPEG・PNG・WebP、10MBまで。</p>`;
@@ -191,7 +224,7 @@ function recordDialog(target = null) {
         } catch (error) { $('#capture-error').textContent = error.name === 'NotAllowedError' ? 'マイクが使えません。音声ファイルか、写真・文章を使ってください。' : error.message; }
       });
     } else if(selected==='file'){
-      $('#capture-body').innerHTML='<input id="document-file" type="file" accept=".pdf,.epub,.json,.txt"><button id="pick-document" class="primary">ファイルを選ぶ</button><p>1ファイル10MBまで。PDF・EPUBは保存後に知見化する範囲を選べます。対応ハイライトは自動で取り込みます。</p>';
+      $('#capture-body').innerHTML='<input id="document-file" type="file" accept=".pdf,.epub,.json,.txt"><button id="pick-document" class="primary">ファイルを選ぶ</button><p>1ファイル10MBまで。PDF・EPUBは保存する範囲を選べます。AI抽出は各記録から明示的に実行します。対応ハイライトは自動で取り込みます。</p>';
       bind('#pick-document','click',()=>$('#document-file').click());bind('#document-file','change',event=>{if(event.target.files[0])saveImport([...event.target.files]);});
     } else {
       $('#capture-body').innerHTML = `<form id="text-form"><label><span>残したい文章・一言</span><textarea id="capture-text" maxlength="20000" placeholder="思いついたことを、そのまま" required></textarea></label><label><span>出典（任意）</span><input id="capture-source" maxlength="2000" placeholder="空欄でも、本の名前やメディアのURLでも"></label><button class="primary" type="submit">残す</button></form>`;
@@ -218,7 +251,7 @@ async function saveUpload(file, text, target, reuse = null) {
     await api(target ? `/api/captures/${target.id}/assets` : '/api/captures', { method:'POST', headers, body:payload });
     uploading = false; uploadPending = null; dialog.close();
     if (target) await openCapture(target.id); else await home();
-    showNotice('残しました。整理は自動で続きます。');
+    showNotice('残しました。AIはまだ実行していません。');
   } catch (error) {
     uploading = false;
     if (!dialog.open) return;
@@ -245,7 +278,7 @@ async function openCapture(captureId) {
   renderCapture();
 }
 function renderCapture() {
-  const c = currentCapture, h = c.harvest, label = c.job?.error_code==='extraction_required'?'保存済み':statusLabel({ ...c.job, error_code:c.job?.error_code });
+  const c = currentCapture, h = c.harvest, label = statusLabel({ ...c.job, error_code:c.job?.error_code, ai_authorized:c.ai_authorized });
   const source = `${c.source_certainty === 'inferred' ? '推定 ' : ''}${esc(c.source_title || (c.import_origin==='user'?'自分のメモ':'出典未確認'))}`;
   const sourceLocator = c.page ? ` · ${c.locator_certainty === 'inferred' ? '推定 ' : ''}p.${esc(c.page)}` : '';
   const adopted = c.views.find(v => v.draft_key === `${c.id}:${c.version}`);
@@ -260,10 +293,10 @@ function renderCapture() {
     ${h?'<section class="detail-section"><button id="find-related" class="primary">関連を探す</button><div id="related-candidates"></div></section>':''}
     ${h?'<details class="fold"><summary>周辺のつながりを読む・概念を整理する</summary><button id="open-neighborhood" class="quiet">この知見の周辺を開く</button></details>':''}
     ${h?'<details class="fold"><summary>問いを外部資料で確かめる</summary><button id="research-start" class="quiet">調べる</button></details>':''}
-    ${h ? `<section class="detail-section"><h2>拾った知見</h2>${h.claims.slice(0,3).map(claim => `<div class="knowledge-item"><p><span class="origin">${({ source:'資料の主張', user:'自分の発言', ai:'AIの推論' })[claim.evidence.origin]} · ${({ explicit:'記録あり', inferred:'推論', uncertain:'不確か' })[claim.evidence.certainty]}</span></p>
+    ${h ? `<section class="detail-section"><h2>拾った知見</h2>${h.claims.map(claim => `<div class="knowledge-item"><p><span class="origin">${({ source:'資料の主張', user:'自分の発言', ai:'AIの推論' })[claim.evidence.origin]} · ${({ explicit:'記録あり', inferred:'推論', uncertain:'不確か' })[claim.evidence.certainty]}</span></p>
       <p>${esc(claim.text)}</p>${claim.conditions.length ? `<p class="subtle">条件：${claim.conditions.map(esc).join('、')}</p>` : ''}${claim.evidence.quote ? `<blockquote>${esc(claim.evidence.quote)}</blockquote>` : ''}</div>`).join('')}
       ${h.concepts.length ? `<p class="concepts">${h.concepts.map(k => esc(k.name)).join(' · ')}</p>` : ''}</section>
-      ${h.questions.length ? `<section class="detail-section"><h2>考えの続き</h2>${h.questions.slice(0,3).map(q => `<p>${esc(q.text)}</p>`).join('')}</section>` : ''}
+      ${h.questions.length ? `<section class="detail-section"><h2>考えの続き</h2>${h.questions.map(q => `<p>${esc(q.text)}</p>`).join('')}</section>` : ''}
       ${graphMarkup(graph)}
       ${proposal ? `<section class="draft"><h2>見方への影響 · AIの修正案</h2><p class="subtle">${esc(proposal.reason)}</p><details class="fold"><summary>変更する箇所と理由を読む</summary><p class="subtle">いまの文章</p><p class="prose">${esc(proposal.from_text)}</p><p class="subtle">修正案</p><p class="prose">${esc(proposal.to_text)}</p><button class="quiet" data-hide="${esc(`proposal:${proposal.view_id}:${proposal.from_text}:${proposal.to_text}`)}">この案を表示しない</button></details>${proposal.stale?'<p class="subtle">現行の見方が変わっています。関連を探して案を更新できます。</p>':'<button id="adopt-proposal" class="quiet">この見方に更新</button>'}</section>` : h.view_draft ? `<section class="draft"><h2>${adopted ? '自分の見方に残しました' : '見方の案 · AIが考えたこと'}</h2><p class="prose">${esc(h.view_draft.text)}</p><p class="subtle">${esc(h.view_draft.reason)}</p>
       ${adopted ? `<a href="#" id="adopted-view">採用した見方と履歴を読む</a>` : '<button id="adopt" class="quiet">自分の見方にする</button>'}</section>` : ''}
@@ -336,7 +369,7 @@ function correctionDialog(c) {
     event.preventDefault(); const button = event.target.querySelector('button'); button.disabled = true;
     try {
       await api(`/api/captures/${c.id}`, json('PATCH', { version:c.version, corrected_text:$('#corrected-text').value || null, note:$('#note').value, source_title:$('#source-title').value, page:$('#page-number').value }));
-      closeDialog(); await openCapture(c.id); showNotice('訂正を残しました。もう一度読み取ります。');
+      closeDialog(); await openCapture(c.id); showNotice('訂正を残しました。AIはまだ実行していません。');
     } catch (e) { $('#correction-error').textContent = e.message; button.disabled = false; }
   });
 }
@@ -386,7 +419,7 @@ function privacyDialog() {
     <p>解析には、対象の原資料、自分の一言、前回の書名だけをOpenAIへ送ります。横断接続には、過去の関連候補を最大12記録・120ノードと、現行の見方を最大6件送ります。保存時にはAIを実行しません。抽出は明示操作で開始します。関連探索とテーマの理解の更新は、ボタンで依頼した時だけ実行します。</p>
     <p>AIが作るのは知見と見方の案です。「自分の見方にする」を選んだ文章だけが、本人の見方として残ります。</p>
     <p class="subtle">${state?.ai_configured ? 'AI解析は設定済みです。' : 'AI解析は未設定です。原資料を保存して待ちます。'}<br>今日の呼び出し ${state?.usage.calls || 0} / ${state?.daily_limit || '—'}（UTC日次）。写真・文章は読み取りと横断整理で通常2回、${state?.ai?.mode==='chatgpt'?'音声は原資料の保存のみ。':'音声は文字起こしを含めて通常3回。'}<br>${state?.ai?.mode==='chatgpt' ? 'AI解析は ChatGPT のサブスク枠のみを使います。有料APIへの自動切り替えはありません。音声文字起こしと意味索引は使わず、検索は語句検索です。接続状態：'+esc(state.ai.state)+ '。' : '解析と意味索引は有料APIを使います。上限は呼び出し数です。'}</p>
-    <p class="subtle">保存した記録と採用履歴から、区切り・日・週の振り返りを自動で整理します。最大20記録・10改訂をAI処理へ送ります。</p>
+    <p class="subtle">区切り・日・週の振り返りは自動生成しません。AI処理は明示的な操作に限定します。</p>
     ${state?.ai?.mode==='chatgpt'?'<p>ChatGPT の接続はパソコンから設定できます。上限や接続切れの間は原資料を保存して待ちます。</p><button id="chatgpt-disconnect" class="quiet danger">ChatGPT 接続を解除</button>':''}<details class="fold"><summary>振り返りの通知</summary><p class="subtle">このアプリを開いている間の通知です。既定はオフ。本文が端末の通知に表示されます。</p><label><input id="reflection-notifications" type="checkbox"> 通知を使う</label><p id="notification-error" class="error" role="alert"></p></details>
     <details class="fold"><summary>端末の保存とオフライン</summary><p>最近20記録・10件の見方と、取得できた原資料を自動で端末に残します。読書キャッシュは最大20MB、未送信の原資料は別枠で最大50MBです。端末側の保存領域が削除されると未送信データを失うため、接続時の同期または書き出しで残せます。</p><label><span>最近の記録を残す件数</span><select id="device-record-count"><option>5</option><option selected>20</option><option>50</option></select></label><label><span>読書キャッシュの容量（MB）</span><select id="device-cache-mb"><option>5</option><option selected>20</option><option>40</option></select></label><label><span>未送信原資料の容量（MB）</span><select id="device-outbox-mb"><option>20</option><option selected>50</option></select></label><p class="subtle">設定を減らしても、未送信の原資料は自動で削除しません。</p><button id="device-status" class="quiet">未送信・競合を見る</button><button id="device-clear-cache" class="quiet">読書キャッシュだけ削除</button><button id="device-export" class="quiet">未送信の原資料を書き出す</button><button id="device-discard" class="quiet danger">未送信の原資料をすべて削除</button><p id="device-error" class="error"></p></details><p class="subtle">削除は記録の詳細から。書き出しには元ファイルと履歴も含みます。</p></div>`);
   bind('#chatgpt-disconnect','click',async()=>{try{await api('/api/ai/disconnect',{method:'POST'});state.ai.state='disconnected';state.ai_configured=false;closeDialog();showNotice('ChatGPT 接続を解除しました。');}catch(e){showNotice(e.message);}});
@@ -398,6 +431,10 @@ function privacyDialog() {
    catch(e){event.target.checked=false;try{localStorage.setItem('reflection-notifications','off');}catch{}$('#notification-error').textContent=e.message;}
   });
 }
+
+// Keep the tiny AI indicator accurate even while the user is reading another screen.
+setInterval(()=>refreshAiActivity(),3000);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)refreshAiActivity();});
 
 // Poll only small summaries. Never replace an open editor or an expanded source while reading.
 setInterval(async () => {
@@ -417,7 +454,24 @@ setInterval(async () => {
   finally { pollBusy = false; }
 }, 2500);
 
-home().catch(error => { if (error.status !== 401) { app.innerHTML = '<p class="loading">接続を確認して、ページを開き直してください。</p>'; } });
+async function start(){
+  try{
+    const response=await fetch('/api/auth-config',{credentials:'same-origin',cache:'no-store'});
+    if(response.redirected||[401,403].includes(response.status)){login();return;}
+    if(!response.ok)throw Error('Authentication configuration unavailable');
+    const config=await response.json();
+    if(!['password','cloudflare_access'].includes(config.auth_method))throw Error('Unknown authentication mode');
+    authMethod=config.auth_method; setDeviceAuthMethod(authMethod);
+    try{localStorage.setItem('book-auth-method',authMethod);}catch{}
+  }catch(error){
+    // An offline reading cache can still open; unknown mode never renders a password form.
+    if(navigator.onLine)throw error;
+    try{authMethod=localStorage.getItem('book-auth-method');}catch{}
+    setDeviceAuthMethod(authMethod);
+  }
+  await home();
+}
+start().catch(error => { if (![401,403].includes(error.status)) { app.innerHTML = '<p class="loading">接続を確認して、ページを開き直してください。</p>'; } });
 
 const importState=value=>({pending:'保存済み・取り込み待ち',running:'取り込み中',ready:'範囲を選択できます',completed:'取り込み済み',partial:'一部失敗・成功分は保存済み',failed:'取り込みできませんでした'})[value]||value;
 async function saveImport(files,reuse=null){
@@ -431,13 +485,12 @@ async function openImport(jobId){
  app.innerHTML=`${header(false)}<button id="back" class="back">← 残したもの</button><article><div class="detail-head"><p class="eyebrow">取り込み</p><h1>${esc(job.metadata.title||job.name)}</h1><p class="status">${esc(importState(job.state))}</p><p class="subtle">保存 ${job.items.filter(i=>i.capture_id).length}件 ／ 選択 ${job.items.filter(i=>i.selected).length}件 ／ 範囲 ${job.items.length}件</p></div>
  ${job.error_code==='extraction_required'?'<button id="import-extract" class="primary">抽出する · AI</button>':''}
  ${job.metadata.warnings?.length?`<details class="fold"><summary>取得できない範囲</summary>${job.metadata.warnings.map(w=>`<p class="subtle">${esc(w)}</p>`).join('')}</details>`:''}
- ${['pdf','epub'].includes(job.format)&&job.items.length?`<form id="import-select"><p class="subtle">読んだ箇所・知見化したい範囲だけ選択します。1回20件まで、1件は知見化・横断整理で通常2回のAI処理。未選択の本文はAIへ送りません。</p>${job.items.map(i=>`<details class="fold"><summary>${i.state==='deleted'?'削除済み':esc(i.locator||`範囲 ${i.ordinal}`)}${i.capture_id?' · 保存済み':''}</summary><p class="prose">${esc(i.preview||'本文取得不能')}</p>${i.state!=='deleted'&&!i.capture_id&&i.preview?`<label><input type="checkbox" name="ordinal" value="${i.ordinal}"> この範囲を取り込む</label>`:''}${i.capture_id?`<a href="#" data-import-capture="${i.capture_id}">知見と原文を読む</a>`:''}</details>`).join('')}<p id="import-error" class="error" role="alert"></p><button class="primary">選んだ範囲を残す</button></form>`:job.items.map(i=>`<div class="history"><p>${esc(i.locator||`項目 ${i.ordinal}`)} · ${esc(i.state==='saved'?'保存済み':i.state==='deleted'?'削除済み':i.state==='failed'?'失敗':'待機')}</p>${i.capture_id?`<a href="#" data-import-capture="${i.capture_id}">知見と原資料を読む</a>`:''}${i.error_code?`<p class="error">${esc(i.error_code)}</p>`:''}</div>`).join('')}
+ ${['pdf','epub'].includes(job.format)&&job.items.length?`<form id="import-select"><p class="subtle">保存したい範囲だけ選択します。1回20件まで。選択しただけではAIを実行せず、各記録から「AIで抽出する」を押した場合だけ送信します。</p>${job.items.map(i=>`<details class="fold"><summary>${i.state==='deleted'?'削除済み':esc(i.locator||`範囲 ${i.ordinal}`)}${i.capture_id?' · 保存済み':''}</summary><p class="prose">${esc(i.preview||'本文取得不能')}</p>${i.state!=='deleted'&&!i.capture_id&&i.preview?`<label><input type="checkbox" name="ordinal" value="${i.ordinal}"> この範囲を取り込む</label>`:''}${i.capture_id?`<a href="#" data-import-capture="${i.capture_id}">知見と原文を読む</a>`:''}</details>`).join('')}<p id="import-error" class="error" role="alert"></p><button class="primary">選んだ範囲を残す</button></form>`:job.items.map(i=>`<div class="history"><p>${esc(i.locator||`項目 ${i.ordinal}`)} · ${esc(i.state==='saved'?'保存済み':i.state==='deleted'?'削除済み':i.state==='failed'?'失敗':'待機')}</p>${i.capture_id?`<a href="#" data-import-capture="${i.capture_id}">知見と原資料を読む</a>`:''}${i.error_code?`<p class="error">${esc(i.error_code)}</p>`:''}</div>`).join('')}
  ${job.format==='photos'?`<details class="fold"><summary>写真の順序を訂正</summary><form id="import-order"><label><span>写真番号を表示順に並べる</span><input id="import-order-list" value="${job.items.map(i=>i.ordinal).join(', ')}"></label><button class="quiet">順序を反映する</button></form></details>`:''}
  <details class="fold"><summary>原ファイル・再試行・削除</summary>${job.format!=='photos'?`<p><a href="/api/imports/${job.id}/original" download>原ファイルを保存</a></p>`:''}${['failed','partial'].includes(job.state)?'<button id="import-retry" class="quiet">失敗分を再試行</button>':''}<button id="import-delete" class="quiet danger">取り込みと関連記録を削除</button></details></article>`;
  wireHeader();bind('#back','click',()=>home().catch(e=>showNotice(e.message)));document.querySelectorAll('[data-import-capture]').forEach(el=>el.onclick=event=>{event.preventDefault();openCapture(el.dataset.importCapture).catch(e=>showNotice(e.message));});
  bind('#import-select','submit',async event=>{event.preventDefault();try{const ordinals=[...event.target.querySelectorAll('input:checked')].map(x=>Number(x.value));await api(`/api/imports/${job.id}/select`,json('POST',{ordinals}));await openImport(job.id);}catch(e){$('#import-error').textContent=e.message;}});
  bind('#import-order','submit',async event=>{event.preventDefault();try{await api(`/api/imports/${job.id}/order`,json('POST',{ordinals:$('#import-order-list').value.split(',').map(x=>Number(x.trim()))}));await openImport(job.id);}catch(e){showNotice(e.message);}});
- bind('#import-extract','click',async event=>{event.target.disabled=true;try{await api(`/api/imports/${job.id}/extract`,json('POST',{}));await openImport(job.id);}catch(e){showNotice(e.message);event.target.disabled=false;}});
  bind('#import-retry','click',async()=>{try{await api(`/api/imports/${job.id}/retry`,json('POST',{}));await openImport(job.id);}catch(e){showNotice(e.message);}});
  bind('#import-delete','click',()=>{modal('取り込みを削除する',`<p>原ファイル、選択範囲と関連する読書記録を削除します。採用した見方と履歴は残ります。</p><button id="import-delete-confirm" class="primary">削除する</button>`);bind('#import-delete-confirm','click',async()=>{try{await api(`/api/imports/${job.id}`,json('DELETE',{}));closeDialog();await home();}catch(e){showNotice(e.message);}});});
  if(['pending','running'].includes(job.state))setTimeout(()=>{if(currentView?.import&&currentView.id===job.id&&!dialog.open)openImport(job.id).catch(e=>showNotice(e.message));},2500);
@@ -446,7 +499,7 @@ async function openImport(jobId){
 const researchState=s=>({pending:'調査待ち',running:'公開本文を調査中',completed:'調査済み',partial:'一部取得できませんでした',blocked:'AI設定・利用枠待ち',failed:'調査を完了できませんでした',canceled:'停止済み',superseded:'元の問い・資料が更新されました'})[s]||s;
 async function researchDialog(context,question,period=''){
  const {hosts}=await api('/api/research/hosts'),key=crypto.randomUUID();
- modal('外部資料を調べる',`<form id="research-form"><label><span>外へ送る問い（この文章だけ）</span><textarea id="research-question" maxlength="1000" required>${esc(question)}</textarea></label><label><span>対象期間（任意・問いと一緒に送信）</span><input id="research-period" maxlength="100" value="${esc(period)}"></label><p class="subtle">本人メモや本の全本文は送信しません。検索1回・比較1回までのAI処理、本文は最大3件。保存した資料には通常2回ずつの知見化処理と、後続の振り返り処理が追加されます。日次利用枠も適用します。</p><details class="fold"><summary>取得できる公開資料サイト</summary><p class="prose">${hosts.map(esc).join('、')}</p></details><p id="research-error" class="error" role="alert"></p><button class="primary">この問いを調べる</button></form>`);
+ modal('外部資料を調べる',`<form id="research-form"><label><span>外へ送る問い（この文章だけ）</span><textarea id="research-question" maxlength="1000" required>${esc(question)}</textarea></label><label><span>対象期間（任意・問いと一緒に送信）</span><input id="research-period" maxlength="100" value="${esc(period)}"></label><p class="subtle">本人メモや本の全本文は送信しません。このボタンで検索1回・比較1回までのAI処理を明示的に開始します。取得した資料の追加AI抽出や振り返りは自動実行しません。日次利用枠も適用します。</p><details class="fold"><summary>取得できる公開資料サイト</summary><p class="prose">${hosts.map(esc).join('、')}</p></details><p id="research-error" class="error" role="alert"></p><button class="primary">この問いを調べる</button></form>`);
  bind('#research-form','submit',async e=>{e.preventDefault();e.submitter.disabled=true;try{const r=await api('/api/research',{...json('POST',{...context,question:$('#research-question').value,subject_period:$('#research-period').value}),headers:{'Content-Type':'application/json','Idempotency-Key':key}});closeDialog();if(r.local){await home();showNotice('調査依頼を端末に保存しました。接続後に開始します。');}else await openResearch(r.id);}catch(err){$('#research-error').textContent=err.message;e.submitter.disabled=false;}});
 }
 async function openResearch(runId){
@@ -490,8 +543,12 @@ initDevice().then(()=>resume()).catch(e=>showNotice(e.message));
 
 function themeHome(index){
  if(!index)return '';
- const themes=index.themes||[],domains=index.domains||[];
- return `<section class="theme-home" aria-label="育てている問い"><p class="section-label">育てている問い</p>${domains.map(d=>{const list=themes.filter(t=>JSON.parse(t.domain_ids||'[]').includes(d.id));return `<section class="theme-domain"><h2>${esc(d.name)}</h2>${list.map(t=>{const r=t.result?JSON.parse(t.result):null;return `<button class="capture-row theme-row" data-theme="${esc(t.id)}"><h3>${esc(t.question)}</h3><p>${esc(t.stale?'根拠が変わっています。更新前の理解です。':r?.understanding[0]?.text||(t.material_count?'材料が集まっています。テーマを開いて理解を更新できます。':'これから材料を集める問いです。'))}</p>${!t.stale&&r?.changed&&r?.change_reason?`<p class="subtle">今回の変化 · ${esc(r.change_reason)}</p>`:''}${['failed','blocked'].includes(t.job_state)?'<p class="subtle">整理は保留中です。保存した材料と以前の理解は読めます。</p>':''}</button>`;}).join('')}</section>`;}).join('')}</section>`;
+ const themes=index.themes||[],byId=new Map(themes.map(t=>[t.id,t])),children=new Map();
+ for(const edge of index.branches||[]){const child=byId.get(edge.child_id);if(!child||!byId.has(edge.parent_id))continue;const list=children.get(edge.parent_id)||[];if(!list.some(t=>t.id===child.id))list.push(child);children.set(edge.parent_id,list);}
+ const count=(t,seen=new Set())=>{if(seen.has(t.id))return 0;seen.add(t.id);return Number(t.integration_count||0)+(children.get(t.id)||[]).reduce((n,c)=>n+count(c,seen),0);};
+ const sort=list=>[...list].sort((a,b)=>count(b)-count(a)||Number(b.updated_at||0)-Number(a.updated_at||0)||a.id.localeCompare(b.id));
+ const render=(t,seen=new Set())=>{if(seen.has(t.id))return '';const next=new Set(seen).add(t.id),branches=sort(children.get(t.id)||[]);return `<li><button class="capture-row theme-row" data-theme="${esc(t.id)}"><h2>${esc(t.question)}</h2></button>${branches.length?`<ul class="question-branches">${branches.map(c=>render(c,next)).join('')}</ul>`:''}</li>`;};
+ return `<section class="theme-home" aria-label="問い"><button id="find-integration-proposals" class="quiet">統合案を探す</button><div id="integration-proposals"></div><ul class="question-roots">${sort(themes.filter(t=>t.is_tip!==0)).map(t=>render(t)).join('')}</ul></section>`;
 }
 function wireThemeLinks(){document.querySelectorAll('[data-theme]').forEach(el=>el.onclick=event=>{event.preventDefault();openTheme(el.dataset.theme).catch(e=>showNotice(e.message));});}
 async function openTheme(themeId,fromCapture=null){
@@ -500,28 +557,75 @@ async function openTheme(themeId,fromCapture=null){
  const r=t.result;
  const sections=[['understanding','現在の暫定理解'],['changes','最近起きている変化'],['competing','競合する説明'],['conditions','成立条件と反例'],['questions','次に確かめたい問い']];
  const proof=e=>{const p=t.evidence.find(p=>p.claim_id===e.claim_id);return p?`<blockquote>${esc(p.quote||'AIの推論・原文引用なし')}<p class="subtle">${esc(({source:'資料の主張',user:'本人の発言',ai:'AIの推論'})[p.origin])} · ${esc(p.source_title||'出典未確認')}${p.page?` · p.${esc(p.page)}`:''} · ${esc(({support:'説明の支持',counterexample:'反例',condition:'条件追加',example:'具体例',background:'背景',unresolved:'未解決'})[e.role])}</p><a href="#" data-theme-source="${esc(p.capture_id)}">原記録を読む</a></blockquote>`:'';};
- app.innerHTML=`${header()}<nav class="theme-nav"><button id="back" class="back">← 育てている問い</button>${fromCapture?'<button id="theme-origin-back" class="back">← 元の記録</button>':''}</nav><article><div class="detail-head"><p class="eyebrow">AIが整理した理解${t.revision?` · 第${t.revision}版`:''}</p><h1>${esc(t.theme.question)}</h1><p class="subtle">${esc(t.theme.scope)}</p>${t.stale?'<p class="status">原根拠が変更・削除されています。以下は更新前の理解です。有効な引用だけを表示しています。</p>':''}${t.job&&['failed','blocked'].includes(t.job.state)?`<p class="subtle">${esc(errors[t.job.error_code]||'整理を完了できませんでした。原資料と以前の理解は保存されています。')}</p>`:''}</div>
- ${r?sections.map(([key,label])=>r[key].length?`<section class="detail-section"><h2>${label}</h2>${r[key].map(e=>`<p class="prose">${esc(e.text)}</p><p class="subtle">${e.interpretation==='ai'?'AIの仮説・整理':e.interpretation==='user'?'本人の発言':'資料が述べる説明'}${e.period?` · 対象時期 ${esc(e.period)}`:''}</p><details class="fold"><summary>根拠を読む</summary>${e.evidence.map(proof).join('')||'<p>現時点で有効な原根拠を確認できません。</p>'}</details>`).join('')}</section>`:'').join(''):'<section class="detail-section"><p>まだ統合知見はありません。記録から「関連を探す」で材料を選べます。</p></section>'}
+ app.innerHTML=`${header(true,false)}<nav class="theme-nav"><button id="back" class="back">← 育てている問い</button>${fromCapture?'<button id="theme-origin-back" class="back">← 元の記録</button>':''}</nav><article><div class="detail-head"><h1>${esc(t.theme.question)}</h1>${t.theme.content?`<p class="prose">${esc(t.theme.content)}</p>`:''}<button id="edit-question" class="quiet">編集</button><button id="find-related" class="primary">統合</button><button id="drilldown" class="quiet">深掘り</button><button id="question-relations" class="quiet">関係を探す</button>${t.stale?'<p class="status">問いや根拠が変更されています。以下は更新前の理解です。有効な引用だけを表示しています。</p>':''}${t.job&&['failed','blocked'].includes(t.job.state)?`<p class="subtle">${esc(errors[t.job.error_code]||'整理を完了できませんでした。原資料と以前の理解は保存されています。')}</p>`:''}</div>
+ ${r?sections.map(([key,label])=>r[key].length?`<section class="detail-section">${key==='understanding'?'':`<h2>${label}</h2>`}${r[key].map(e=>`<p class="prose">${esc(e.text)}</p><details class="fold"><summary>根拠</summary><p class="subtle">${e.interpretation==='ai'?'AIの仮説・整理':e.interpretation==='user'?'本人の発言':'資料が述べる説明'}${e.period?` · 対象時期 ${esc(e.period)}`:''}</p>${e.evidence.map(proof).join('')||'<p>現時点で有効な原根拠を確認できません。</p>'}</details>`).join('')}</section>`:'').join(''):''}
  ${r?.changed&&r?.change_reason?`<section class="detail-section"><h2>今回の理解の変化</h2><p>${esc(r.change_reason)}</p></section>`:''}
  ${t.history.length?`<details class="fold"><summary>理解が変わった理由</summary>${t.history.map(h=>`<p>第${h.version}版 · ${date(h.created_at)}<br>${esc(h.change_reason)}</p>`).join('')}</details>`:''}
  ${t.relations.length?`<section class="detail-section"><h2>ほかの問いとのつながり</h2>${t.relations.map(x=>{const p=JSON.parse(x.payload);return `<p>${esc(p.common_structure)}</p><p class="subtle">違い：${esc(p.important_difference)}</p><a href="#" data-theme="${esc(x.to_theme)}">つながるテーマを読む</a>`;}).join('')}</section>`:''}
  ${t.proposals.length?`<details class="fold"><summary>自分の見方への案</summary><p class="subtle">採用したときだけ、自分の見方に保存します。</p>${t.proposals.map(p=>`<p class="prose">${esc(p.to_text)}</p><p>${esc(p.reason)}</p><button class="quiet" data-theme-adopt="${p.id}">この見方を採用する</button><button class="quiet" data-theme-hide="${p.id}">この案を表示しない</button>`).join('')}</details>`:''}
  ${t.views.length?`<section class="detail-section"><h2>自分が採用した見方</h2>${t.views.map(v=>`<a href="#" data-theme-view="${v.id}">${esc(v.body)}</a>`).join('<br>')}</section>`:''}
- <button id="theme-rebuild" class="quiet">理解を更新する</button><details class="fold"><summary>この問いに集まった記録</summary>${t.materials.map(m=>`<p>${esc(m.reason)}<br><a href="#" data-theme-source="${m.capture_id}">原記録を読む</a></p>`).join('')||'<p>まだ関連する記録はありません。</p>'}</details></article>`;
- bind('#theme-rebuild','click',async event=>{event.target.disabled=true;try{await api(`/api/themes/${encodeURIComponent(themeId)}/rebuild`,json('POST',{version:t.theme.version,idempotency_key:crypto.randomUUID()}));await openTheme(themeId);showNotice('理解の更新を予約しました。');}catch(e){showNotice(e.message);event.target.disabled=false;}});
+ <section id="related-candidates"></section>
+ ${(t.identity_sources||[]).length?`<details class="fold"><summary>まとめた元の問い</summary>${t.identity_sources.map(q=>`<h3>${esc(q.question)}</h3>${q.content?`<p class="prose">${esc(q.content)}</p>`:''}`).join('')}</details>`:''}
+ ${t.parents?.length?`<nav class="theme-nav">${t.parents.map(p=>`<button class="back" data-theme="${esc(p.id)}">↑ ${esc(p.question)}</button>`).join('')}</nav>`:''}
+ ${(t.drilldown_parents||[]).map(p=>`<button class="back" data-theme="${esc(p.id)}">↑ ${esc(p.question)}</button>`).join('')}
+ ${(t.oppositions||[]).length?`<section class="knowledge-branch"><h2>対立</h2>${t.oppositions.map(c=>`<div><button class="capture-row" data-theme="${esc(c.id)}">↔ ${esc(c.question)}</button><button class="quiet" data-opposition-remove="${esc(c.id)}">解除</button></div>`).join('')}</section>`:''}
+ ${(t.drilldown_children||[]).length?`<section class="knowledge-branch"><h2>掘り下げた問い</h2>${t.drilldown_children.map(c=>`<button class="capture-row" data-theme="${esc(c.id)}">${esc(c.question)}</button>`).join('')}</section>`:''}
+ <section class="knowledge-branch">${(t.children?.length?t.children:t.materials.map(m=>({child_kind:'capture',child_id:m.capture_id,title:'記録'}))).map(m=>`<button class="capture-row" ${m.child_kind==='theme'?`data-theme="${esc(m.child_id)}"`:`data-theme-source="${esc(m.child_id)}"`}>${esc(m.title)}</button>`).join('')}</section>
+ <details class="fold"><summary>その他</summary><button id="delete-question" class="danger">この問いを削除</button></details></article>`;
+ document.querySelectorAll('[data-opposition-remove]').forEach(b=>b.onclick=async()=>{try{await api(`/api/themes/${encodeURIComponent(themeId)}/relationships/remove`,json('POST',{target_id:b.dataset.oppositionRemove}));await openTheme(themeId);}catch(e){showNotice(e.message);}});
+ bind('#question-relations','click',async()=>{modal('関係を探す','<p id="relation-status">探索中…</p><section id="relation-candidates"></section>');try{const run=await api(`/api/themes/${encodeURIComponent(themeId)}/relationships`,json('POST',{version:t.theme.version}));if(!$('#relation-candidates'))return;$('#relation-status').textContent=run.candidates.length?'':'候補はありません';const labels={upstream:'上流',downstream:'下流',opposes:'対立'};$('#relation-candidates').innerHTML=run.candidates.map((c,i)=>`<section><p class="subtle">${labels[c.type]}${c.target_id?'':' · 新しい仮説'}</p><h3>${esc(c.question)}</h3><p>${esc(c.reason)}</p><button class="quiet" data-relation-save="${i}">採用</button></section>`).join('');document.querySelectorAll('[data-relation-save]').forEach(b=>b.onclick=async()=>{b.disabled=true;try{await api(`/api/themes/${encodeURIComponent(themeId)}/relationships/save`,json('POST',{run_id:run.id,candidate_index:Number(b.dataset.relationSave)}));b.textContent='採用済み';}catch(e){$('#relation-status').textContent=e.message;b.disabled=false;}});}catch(e){if($('#relation-status'))$('#relation-status').textContent=e.message;}});
+ bind('#drilldown','click',()=>openDrilldown(themeId,t.theme.version));
+ bind('#edit-question','click' ,()=>{modal('問いを編集',`<form id="question-edit" class="field-stack"><label><span>主題</span><input id="question-title" maxlength="200" required value="${esc(t.theme.question)}"></label><label><span>内容（任意）</span><textarea id="question-content" maxlength="10000">${esc(t.theme.content||'')}</textarea></label><p id="question-edit-error" class="error"></p><button class="primary">保存</button></form>`);bind('#question-edit','submit',async e=>{e.preventDefault();e.submitter.disabled=true;try{await api(`/api/themes/${encodeURIComponent(themeId)}`,json('PATCH',{version:t.theme.version,question:$('#question-title').value,content:$('#question-content').value}));closeDialog();await openTheme(themeId,fromCapture);}catch(err){$('#question-edit-error').textContent=err.message;e.submitter.disabled=false;}});});
+ bind('#delete-question','click',async event=>{if(!confirm('この問いを削除しますか？\n関連する親子・対立リンクも外れます。'))return;event.target.disabled=true;try{await api(`/api/themes/${encodeURIComponent(themeId)}`,json('DELETE',{version:t.theme.version}));showNotice('問いを削除しました。');await home();}catch(e){showNotice(e.message);event.target.disabled=false;}});
+ bind('#find-related','click',async event=>{event.target.disabled=true;try{const r=await api('/api/book/discover',json('POST',{id:themeId,version:t.theme.version,idempotency_key:crypto.randomUUID()}));showRelated(r,{id:themeId,kind:'theme'});}catch(e){showNotice(e.message);}finally{event.target.disabled=false;}});
  wireHeader();wireThemeLinks();bind('#back','click',()=>home().catch(e=>showNotice(e.message)));bind('#theme-origin-back','click',()=>openCapture(fromCapture));
  document.querySelectorAll('[data-theme-source]').forEach(el=>el.onclick=async event=>{event.preventDefault();await openCapture(el.dataset.themeSource);const parent=document.createElement('button');parent.className='back';parent.textContent='← この根拠を使うテーマ';parent.onclick=()=>openTheme(themeId,currentCapture?.id);$('#back').after(parent);});
  document.querySelectorAll('[data-theme-view]').forEach(el=>el.onclick=event=>{event.preventDefault();openView(el.dataset.themeView).catch(e=>showNotice(e.message));});
  for(const action of ['adopt','hide'])document.querySelectorAll(`[data-theme-${action}]`).forEach(el=>el.onclick=async()=>{el.disabled=true;try{await api(`/api/themes/${encodeURIComponent(themeId)}/proposals`,json('POST',{action,proposal_id:el.dataset[action==='adopt'?'themeAdopt':'themeHide']}));await openTheme(themeId);}catch(e){showNotice(e.message);el.disabled=false;}});
 }
 
+function openDrilldown(themeId,version){
+ let run=null;const selected=new Set(),saved=new Map();
+ modal('深掘り',`<form id="drilldown-form"><label><span>方向（任意）</span><input id="drilldown-direction" maxlength="1000"></label><button class="primary">AIで候補を出す</button></form><p id="drilldown-error" class="error"></p><section id="drilldown-candidates"></section><form id="drilldown-manual" hidden><label><span>主題</span><input id="drilldown-title" maxlength="200" required></label><label><span>内容（任意）</span><textarea id="drilldown-content" maxlength="10000"></textarea></label><button class="quiet">候補に追加</button></form><button id="drilldown-link" class="primary" hidden>選んだ問いをつなぐ</button>`);
+ const render=()=>{
+  $('#drilldown-candidates').innerHTML=run.candidates.map((c,i)=>`<section><label><input type="checkbox" data-drilldown-select="${i}" ${selected.has(i)?'checked':''} ${saved.has(i)?'disabled':''}> 選択</label><input aria-label="主題" data-drilldown-question="${i}" maxlength="200" value="${esc(c.question)}" ${saved.has(i)?'disabled':''}><textarea aria-label="内容" data-drilldown-content="${i}" maxlength="10000" ${saved.has(i)?'disabled':''}>${esc(c.content||'')}</textarea><select aria-label="接続先" data-drilldown-target="${i}" ${saved.has(i)?'disabled':''}><option value="selected" ${(c.target||'selected')==='selected'?'selected':''}>選択した問い</option>${(run.oppositions||[]).flatMap(o=>['opposite','both'].map(target=>`<option value="${target}:${esc(o.id)}" ${c.target===target&&c.opposite_id===o.id?'selected':''}>${target==='both'?'両方':'対立側'}：${esc(o.question)}</option>`)).join('')}</select><p class="subtle">${esc(c.origin==='user'?'手動':c.reason)}</p>${saved.has(i)?`<button class="back" data-drilldown-open="${esc(saved.get(i))}">開く</button>`:''}</section>`).join('');
+  $('#drilldown-manual').hidden=false;$('#drilldown-link').hidden=false;$('#drilldown-link').disabled=![...selected].some(i=>!saved.has(i));
+  document.querySelectorAll('[data-drilldown-question]').forEach(b=>b.oninput=()=>run.candidates[Number(b.dataset.drilldownQuestion)].question=b.value);
+  document.querySelectorAll('[data-drilldown-content]').forEach(b=>b.oninput=()=>run.candidates[Number(b.dataset.drilldownContent)].content=b.value);
+  document.querySelectorAll('[data-drilldown-target]').forEach(b=>b.onchange=()=>{const c=run.candidates[Number(b.dataset.drilldownTarget)],split=b.value.indexOf(':');c.target=split<0?'selected':b.value.slice(0,split);c.opposite_id=split<0?null:b.value.slice(split+1);});
+  document.querySelectorAll('[data-drilldown-select]').forEach(b=>b.onchange=()=>{const i=Number(b.dataset.drilldownSelect);b.checked?selected.add(i):selected.delete(i);$('#drilldown-link').disabled=![...selected].some(i=>!saved.has(i));});
+  document.querySelectorAll('[data-drilldown-open]').forEach(b=>b.onclick=()=>{closeDialog();openTheme(b.dataset.drilldownOpen);});
+ };
+ bind('#drilldown-form','submit',async e=>{e.preventDefault();e.submitter.disabled=true;try{run=await api(`/api/themes/${encodeURIComponent(themeId)}/drilldown`,json('POST',{version,direction:$('#drilldown-direction').value}));run.candidates.forEach((_,i)=>selected.add(i));render();$('#drilldown-form').hidden=true;}catch(err){$('#drilldown-error').textContent=err.message;e.submitter.disabled=false;}});
+ bind('#drilldown-manual','submit',async e=>{e.preventDefault();e.submitter.disabled=true;try{const edits=run.candidates;run=await api(`/api/themes/${encodeURIComponent(themeId)}/drilldown/candidates`,json('POST',{run_id:run.id,question:$('#drilldown-title').value,content:$('#drilldown-content').value}));edits.forEach((c,i)=>run.candidates[i]=c);selected.add(run.candidates.length-1);e.target.reset();render();}catch(err){$('#drilldown-error').textContent=err.message;}finally{e.submitter.disabled=false;}});
+ bind('#drilldown-link','click',async e=>{e.target.disabled=true;$('#drilldown-error').textContent='';try{for(const i of selected){if(saved.has(i))continue;const child=await api(`/api/themes/${encodeURIComponent(themeId)}/drilldown/save`,json('POST',{run_id:run.id,candidate_index:i,candidate:{...run.candidates[i],content:run.candidates[i].content||''}}));saved.set(i,child.id);}render();}catch(err){$('#drilldown-error').textContent=err.message;render();}});
+}
+
 function showRelated(run,c){
  const target=$('#related-candidates');if(!target)return;const find=$('#find-related');if(find)find.className='quiet';
  if(run.state!=='completed'){target.innerHTML='<p class="subtle">探索中、または中断しています。</p>';return;}
- const labels={common:'共通',support:'補強',counterexample:'反例',condition:'条件',analogy:'別分野の共通構造',question:'問い'};
+ const labels={common:'共通',support:'補強',counterexample:'反例',condition:'条件',analogy:'別分野の共通構造',question:'問い',same_question:'同じ問い'};
  const storageKey=`related:${run.id}`;let selected;try{selected=JSON.parse(sessionStorage.getItem(storageKey));}catch{}if(!Array.isArray(selected))selected=run.candidates.map(x=>x.id);
- target.innerHTML=`${run.candidates.length?run.candidates.map(x=>`<label><input type="checkbox" data-related-select="${esc(x.id)}" ${selected.includes(x.id)?'checked':''}> ${esc(x.title)}<br><span class="subtle">${labels[x.relation]} · ${esc(x.reason)}</span></label><details class="fold"><summary>原資料を読む</summary><p class="prose">${esc(x.text)}</p><a href="#" data-related-open="${esc(x.id)}">記録を開く</a></details>`).join(''):'<p class="subtle">有用な関連は見つかりませんでした。</p>'}<p class="subtle">${esc(run.destination.question)}</p>${run.retained_evidence?.length?`<details class="fold"><summary>引き継ぐ既存根拠（${run.retained_evidence.length}件）</summary>${run.retained_evidence.map(e=>`<p>${esc(e.title)}</p>`).join('')}</details>`:''}<button id="integrate-related" class="primary"></button>`;
+ target.innerHTML=`${run.candidates.length?run.candidates.map(x=>`<label><input type="checkbox" data-related-select="${esc(x.id)}" ${selected.includes(x.id)?'checked':''}> ${esc(x.title)}<br><span class="subtle">${labels[x.relation]} · ${esc(x.reason)}</span></label><details class="fold"><summary>内容</summary><p class="prose">${esc(x.text)}</p><a href="#" data-related-open="${esc(x.id)}">記録を開く</a></details>`).join(''):'<p class="subtle">有用な関連は見つかりませんでした。</p>'}<p class="subtle">${esc(run.destination.question)}</p>${run.retained_evidence?.length?`<details class="fold"><summary>引き継ぐ既存根拠（${run.retained_evidence.length}件）</summary>${run.retained_evidence.map(e=>`<p>${esc(e.title)}</p>`).join('')}</details>`:''}${c.kind==='theme'?'<select id="integration-mode" aria-label="統合先"><option value="auto">AIの提案に従う</option><option value="deepen">この問いへ集約する</option><option value="parent">新しい問いへつなぐ</option></select>':''}<button id="integrate-related" class="primary"></button>`;
  const ids=()=>[...target.querySelectorAll('[data-related-select]:checked')].map(x=>x.dataset.relatedSelect);
- const update=()=>{sessionStorage.setItem(storageKey,JSON.stringify(ids()));$('#integrate-related').textContent=`${1+ids().length}件を統合する`;};target.querySelectorAll('[data-related-select]').forEach(x=>x.addEventListener('change',update));update();target.querySelectorAll('[data-related-open]').forEach(x=>x.addEventListener('click',e=>{e.preventDefault();openCapture(x.dataset.relatedOpen);}));
- bind('#integrate-related','click',async event=>{event.target.disabled=true;const selectedIds=ids();const actionKey=`integration:${run.id}:${selectedIds.slice().sort().join(',')}`;let key=sessionStorage.getItem(actionKey);if(!key){key=crypto.randomUUID();sessionStorage.setItem(actionKey,key);}try{const r=await api('/api/book/integrate',json('POST',{discovery_id:run.id,selected_ids:selectedIds,idempotency_key:key}));if(r.state==='completed')await openTheme(r.theme_id);else showNotice('処理中、または中断しています。');}catch(e){showNotice(e.message);}finally{event.target.disabled=false;}});
+ const update=()=>{sessionStorage.setItem(storageKey,JSON.stringify(ids()));$('#integrate-related').textContent=`${1+ids().length}件を統合する`;$('#integrate-related').disabled=c.kind==='theme'&&ids().length===0;};target.querySelectorAll('[data-related-select]').forEach(x=>x.addEventListener('change',update));update();target.querySelectorAll('[data-related-open]').forEach(x=>x.addEventListener('click',e=>{e.preventDefault();x.dataset.relatedOpen.startsWith('theme:')?openTheme(x.dataset.relatedOpen):openCapture(x.dataset.relatedOpen);}));
+ bind('#integrate-related','click',async event=>{event.target.disabled=true;const selectedIds=ids();const mode=$('#integration-mode')?.value==='auto'?undefined:$('#integration-mode')?.value;const actionKey=`integration:${run.id}:${mode||''}:${selectedIds.slice().sort().join(',')}`;let key=sessionStorage.getItem(actionKey);if(!key){key=crypto.randomUUID();sessionStorage.setItem(actionKey,key);}try{const r=await api('/api/book/integrate',json('POST',{discovery_id:run.id,selected_ids:selectedIds,...mode?{mode}:{},idempotency_key:key}));if(r.state==='completed')await openTheme(r.theme_id);else showNotice('処理中、または中断しています。');}catch(e){showNotice(e.message);}finally{event.target.disabled=false;}});
+}
+
+let proposalGenerationKey=null;
+function wireIntegrationProposals(){
+ bind('#find-integration-proposals','click',async event=>{event.target.disabled=true;proposalGenerationKey ||= crypto.randomUUID();try{const run=await api('/api/book/integration-proposals',json('POST',{idempotency_key:proposalGenerationKey}));if(run.state!=='running')proposalGenerationKey=null;showIntegrationProposals(run);}catch(e){proposalGenerationKey=null;showNotice(e.message);}finally{event.target.disabled=false;}});
+ api('/api/book/integration-proposals').then(run=>{if($('#integration-proposals')&&run)showIntegrationProposals(run);}).catch(()=>{});
+}
+function showIntegrationProposals(run){
+ const target=$('#integration-proposals');if(!target)return;
+ if(run.state!=='completed'){target.textContent=run.state==='running'?'統合案を探しています…':(run.error||'統合案を取得できませんでした。');return;}
+ const storageKey=`proposal-selection:${run.id}`;let selected;try{selected=JSON.parse(sessionStorage.getItem(storageKey));}catch{};
+ const conflict=(a,b)=>Boolean(a.destination_id&&(a.destination_id===b.destination_id||b.materials.some(m=>m.id===a.destination_id))||b.destination_id&&a.materials.some(m=>m.id===b.destination_id));
+ if(!Array.isArray(selected)){selected=[];for(const p of run.proposals)if(p.state==='pending'&&!run.proposals.filter(x=>selected.includes(x.id)).some(x=>conflict(x,p)))selected.push(p.id);}
+ target.innerHTML=run.proposals.length?run.proposals.map(p=>`<div class="knowledge-item"><label><input type="checkbox" data-proposal-select="${esc(p.id)}" ${selected.includes(p.id)?'checked':''} ${['completed','running'].includes(p.state)?'disabled':''}> ${esc(p.question)}</label><p class="subtle">${p.materials.map(m=>esc(m.title)).join(' ＋ ')}</p><details class="fold"><summary>材料・理由</summary><p>${esc(p.reason)}</p>${p.materials.map(m=>`<p class="prose">${esc(m.text)}</p>`).join('')}</details>${p.state==='completed'?`<a href="#" data-theme="${esc(p.result.theme_id)}">統合済み</a>`:p.state==='failed'?`<p class="error">${esc(p.error)}</p>`:p.state==='running'?'<p>統合中…</p>':''}</div>`).join('')+'<button id="execute-proposals" class="primary"></button>':'<p class="subtle">有用な統合案は見つかりませんでした。</p>';
+ wireThemeLinks();const boxes=()=>[...target.querySelectorAll('[data-proposal-select]')];const ids=()=>boxes().filter(x=>x.checked&&!x.disabled).map(x=>x.dataset.proposalSelect);
+ const update=()=>{const chosen=run.proposals.filter(p=>ids().includes(p.id));for(const box of boxes()){const p=run.proposals.find(p=>p.id===box.dataset.proposalSelect);if(!['completed','running'].includes(p.state))box.disabled=!box.checked&&chosen.some(x=>conflict(x,p));}sessionStorage.setItem(storageKey,JSON.stringify(ids()));const b=$('#execute-proposals');if(b){b.textContent=`選んだ${ids().length}案を統合`;b.disabled=!ids().length;}};
+ boxes().forEach(x=>x.onchange=update);update();
+ bind('#execute-proposals','click',async event=>{event.target.disabled=true;boxes().forEach(x=>x.disabled=true);try{const saved=await api('/api/book/integration-proposals/execute',json('POST',{run_id:run.id,selected_ids:selected=run.proposals.filter(p=>target.querySelector(`[data-proposal-select="${p.id}"]`)?.checked&&!['completed','running'].includes(p.state)).map(p=>p.id),retry:true}));showIntegrationProposals(saved);}catch(e){showNotice(e.message);boxes().forEach(x=>{const p=run.proposals.find(p=>p.id===x.dataset.proposalSelect);x.disabled=['completed','running'].includes(p.state);});update();}});
 }
