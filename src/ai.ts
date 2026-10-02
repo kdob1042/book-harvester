@@ -1,4 +1,5 @@
 import {aiConfigured,subscriptionMode,credentials,subscriptionPayload,completedResponse,SubscriptionError} from './chatgpt.ts';
+import {stmt as policyStmt} from './core.ts';
 import {Buffer} from 'node:buffer';
 import {stmt,now,id,type Capture,type Asset,type Harvest} from './core.ts';
 import {harvestSchema,harvestInstructions,validateHarvest,answerSchema,validateAnswer} from './harvest-contract.js';
@@ -35,6 +36,7 @@ export async function call(env:Env,captureId:string|null,endpoint:string,model:s
  }
 }
 export async function transcribe(env:Env,capture:Capture,asset:Asset,fetcher?:typeof fetch) {
+ if(!await policyStmt(env,"SELECT 1 FROM explicit_ai_actions WHERE kind='extract' AND target_id=? AND version=?",capture.id,capture.version).first())throw new AiError('extraction_required');
  const object=await env.ORIGINALS.get(asset.object_key);if(!object)throw new AiError('original_missing');
  const form=new FormData();form.set('model',env.OPENAI_TRANSCRIBE_MODEL);form.set('response_format','json');
  form.set('file',new Blob([await object.arrayBuffer()],{type:asset.mime}),asset.name);
@@ -42,6 +44,7 @@ export async function transcribe(env:Env,capture:Capture,asset:Asset,fetcher?:ty
  if(typeof data.text!=='string'||!data.text.trim())throw new AiError('empty_transcript');return data.text;
 }
 export async function harvest(env:Env,capture:Capture,assets:Asset[],transcript:string,fetcher?:typeof fetch) {
+ if(!await policyStmt(env,"SELECT 1 FROM explicit_ai_actions WHERE kind='extract' AND target_id=? AND version=?",capture.id,capture.version).first())throw new AiError('extraction_required');
  const inputText=capture.corrected_text??[capture.original_text,transcript].filter(Boolean).join('\n');
  const content:({type:'input_text';text:string}|{type:'input_image';image_url:string;detail:'high'})[]=[{type:'input_text',text:JSON.stringify({
   input_kind:capture.kind,has_audio:assets.some(a=>a.mime.startsWith('audio/')),original_or_corrected_text:inputText,

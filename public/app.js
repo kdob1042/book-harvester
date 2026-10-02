@@ -1,4 +1,4 @@
-import {setDeviceAuthMethod,deviceRequest,initDevice,cacheRecent,pendingOperations,discardOperation,clearReadingCache,exportDevice,discardAllOutbox,resolveConflict,resume,lockDevice,deviceSettings,setDeviceSettings} from './offline.js';
+import {deviceRequest,initDevice,cacheRecent,pendingOperations,discardOperation,clearReadingCache,exportDevice,discardAllOutbox,resolveConflict,resume,lockDevice,deviceSettings,setDeviceSettings} from './offline.js';
 const app = document.querySelector('#app');
 const dialog = document.querySelector('#dialog');
 const notice = document.querySelector('#notice');
@@ -8,8 +8,7 @@ const $ = selector => document.querySelector(selector);
 let state, currentCapture = null, currentView = null, query = '', recorder = null, stream = null, uploading = false, uploadPending = null;
 let searchFilters={source:'',year:'',origin:''};
 const searchPath=()=>`/api/state?q=${encodeURIComponent(query)}&source=${encodeURIComponent(searchFilters.source)}&year=${encodeURIComponent(searchFilters.year)}&origin=${encodeURIComponent(searchFilters.origin)}`;
-let noticeTimer, searchTimer, pollBusy = false, authMethod = null, reauthenticating = false;
-let aiForeground = 0, aiRemote = false, aiVisibleUntil = 0, aiPollBusy = false;
+let noticeTimer, searchTimer, pollBusy = false;
 const errors = {
   subscription_reauth_required:'原資料は保存済みです。パソコンから ChatGPT に再接続してください。',
   subscription_sharing_usage_limit_exceeded:'原資料は保存済みです。サブスク枠の回復後に再試行します。',
@@ -22,48 +21,19 @@ const errors = {
   incomplete_output:'解析結果が途中で止まりました。原資料は残っています。',
   provider_rejected:'解析の設定を確認する必要があります。原資料は残っています。',
 };
-const statusLabel = c => ({ completed:'', pending:'読み取り待ち', running:'読み取り中', failed:'読み取りできませんでした', blocked:['daily_limit','subscription_sharing_usage_limit_exceeded'].includes(c.error_code) ? '保存済み・上限の回復待ち' : c.error_code==='subscription_audio_unsupported'?'保存済み・音声文字起こしは対象外':c.error_code==='subscription_reauth_required'?'保存済み・ChatGPTの再接続待ち':'保存済み・AI設定待ち', superseded:'新しい版を読み取り中' })[c.state || c.job?.state] || '';
+const statusLabel = c => ({ completed:'', pending:'読み取り待ち', running:'読み取り中', failed:'読み取りできませんでした', blocked:c.error_code==='extraction_required'?'保存済み':['daily_limit','subscription_sharing_usage_limit_exceeded'].includes(c.error_code) ? '保存済み・上限の回復待ち' : c.error_code==='subscription_audio_unsupported'?'保存済み・音声文字起こしは対象外':c.error_code==='subscription_reauth_required'?'保存済み・ChatGPTの再接続待ち':'保存済み・AI設定待ち', superseded:'新しい版を読み取り中' })[c.state || c.job?.state] || '';
 const bind = (selector, event, fn) => $(selector)?.addEventListener(event, fn);
 
 function showNotice(text) {
   clearTimeout(noticeTimer); notice.textContent = text;
   noticeTimer = setTimeout(() => { notice.textContent = ''; }, 4500);
 }
-const aiRequest = (path,options={}) => {
-  const method=(options.method||'GET').toUpperCase();
-  if(method==='GET')return false;
-  return path==='/api/captures'||/\/assets$/.test(path)||/\/retry$/.test(path)||/\/ask$/.test(path)||path==='/api/book/discover'||path==='/api/book/integrate'||/^\/api\/themes\/[^/]+\/rebuild$/.test(path)||path==='/api/research'||path==='/api/theme-changes'||path==='/api/concept-edits';
-};
-function syncAiActivity(){
-  const indicator=$('#ai-activity');if(!indicator)return;
-  indicator.hidden=!(aiForeground>0||aiRemote||Date.now()<aiVisibleUntil);
-}
-async function refreshAiActivity(){
-  if(!state||document.hidden||aiPollBusy)return;
-  aiPollBusy=true;
-  try{const result=await deviceRequest('/api/ai-activity');aiRemote=Boolean(result.active);if(aiRemote)aiVisibleUntil=Math.max(aiVisibleUntil,Date.now()+1400);}
-  catch{/* Advisory only: normal requests surface connectivity errors. */}
-  finally{aiPollBusy=false;syncAiActivity();}
-}
-async function api(path,options={}){
-  const tracked=aiRequest(path,options);
-  if(tracked){aiForeground++;aiVisibleUntil=Math.max(aiVisibleUntil,Date.now()+1400);syncAiActivity();}
-  try{return await deviceRequest(path,options);}
-  catch(error){if([401,403].includes(error.status)&&path!=='/api/login'){closeDialog();login();}throw error;}
-  finally{if(tracked){aiForeground=Math.max(0,aiForeground-1);aiVisibleUntil=Math.max(aiVisibleUntil,Date.now()+1400);syncAiActivity();setTimeout(syncAiActivity,1500);}}
-}
+async function api(path,options={}){try{return await deviceRequest(path,options);}catch(error){if(error.status===401&&path!=='/api/login'){closeDialog();login();}throw error;}}
 
 const json = (method, data) => ({ method, headers:{ 'Content-Type':'application/json' }, body:JSON.stringify(data) });
 
 function login() {
-  const method=authMethod||state?.auth_method;
-  if(method!=='password'){
-    if(reauthenticating)return;
-    reauthenticating=true;
-    app.innerHTML='<p class="loading">もう一度ログインして続けてください。未送信の記録は端末に残っています。</p>';
-    app.removeAttribute('aria-busy');
-    location.assign('/cdn-cgi/access/logout');return;
-  }
+  if(state?.auth_method==='cloudflare_access'){location.assign('/cdn-cgi/access/logout');return;}
   currentCapture = null; currentView = null; state = null;
   app.innerHTML = `<div class="login"><p class="eyebrow">BOOK HARVESTER</p><h1>読書の続きを、ここから。</h1>
     <form id="login-form"><label><span>パスワード</span><input id="password" type="password" required autocomplete="current-password"></label>
@@ -77,17 +47,15 @@ function login() {
   });
 }
 
-function header(record = true, primary = true) {
+function header(record = true) {
   return `<header class="top"><div class="brand"><img src="/favicon.svg" alt="">Book Harvester</div><div class="top-actions">
-    <span id="ai-activity" class="ai-activity" hidden role="status" aria-label="AI処理中" title="AI処理中"><span class="ai-activity-label">AI</span><span class="ai-activity-dots" aria-hidden="true"><i></i><i></i><i></i></span></span>
-    ${record ? `<button id="record" class="${primary?'primary':'quiet'}">記録する<span aria-hidden="true">＋</span></button>` : ''}
+    ${record ? '<button id="record" class="primary">記録する<span aria-hidden="true">＋</span></button>' : ''}
     <details class="menu"><summary aria-label="メニュー">···</summary><div class="menu-panel">
     <label><span>記録を検索</span><input id="search" type="search" placeholder="曖昧な言葉でも" value="${esc(query)}"></label>
     <details class="fold"><summary>検索を絞り込む</summary><label><span>本・出典名</span><input id="search-source" value="${esc(searchFilters.source)}"></label><label><span>資料の公開年</span><input id="search-year" inputmode="numeric" maxlength="4" value="${esc(searchFilters.year)}"></label><label><span>発言の由来</span><select id="search-origin"><option value="">すべて</option><option value="source">資料の主張</option><option value="user">本人の発言</option><option value="ai">AIの推論</option></select></label></details><button id="privacy">AIと保存について</button><a href="/api/export" download>すべて書き出す</a>
     <button id="device-menu">端末の保存状況</button><button id="logout">閉じる</button></div></details></div></header>`;
 }
 function wireHeader() {
-  syncAiActivity();
   bind('#record', 'click', () => recordDialog());
   bind('#search', 'input', event => {
     query = event.target.value;
@@ -105,12 +73,11 @@ function wireHeader() {
 
 async function home() {
   const next = await api(searchPath());
-  authMethod = next.auth_method; setDeviceAuthMethod(authMethod);
   state = next; currentCapture = null; currentView = null;
   app.innerHTML = `${header()}<section class="intro"><p class="eyebrow">READ · LEAVE · THINK</p>
     <h1>理解を育てる。</h1><p>${state.current_source ? `${esc(state.current_source.title)}<br>前回の本を引き継ぎます。表紙を残すと、本も切り替わります。` : '本の一節も、自分の気づきも。<br>記録から、同じ問いの理解が育ちます。'}</p></section><section id="feed"></section>`;
   app.removeAttribute('aria-busy'); wireHeader(); renderFeed();
-  refreshAiActivity(); cacheRecent(state).catch(()=>{});
+  cacheRecent(state).catch(()=>{});
 }
 function renderFeed() {
   if (!$('#feed')) return;
@@ -278,7 +245,7 @@ async function openCapture(captureId) {
   renderCapture();
 }
 function renderCapture() {
-  const c = currentCapture, h = c.harvest, label = statusLabel({ ...c.job, error_code:c.job?.error_code });
+  const c = currentCapture, h = c.harvest, label = c.job?.error_code==='extraction_required'?'保存済み':statusLabel({ ...c.job, error_code:c.job?.error_code });
   const source = `${c.source_certainty === 'inferred' ? '推定 ' : ''}${esc(c.source_title || (c.import_origin==='user'?'自分のメモ':'出典未確認'))}`;
   const sourceLocator = c.page ? ` · ${c.locator_certainty === 'inferred' ? '推定 ' : ''}p.${esc(c.page)}` : '';
   const adopted = c.views.find(v => v.draft_key === `${c.id}:${c.version}`);
@@ -287,15 +254,16 @@ function renderCapture() {
     <article><div class="detail-head"><p class="eyebrow">${source}${c.source_inherited ? '（前回の本から引き継ぎ）' : ''}${sourceLocator} · ${date(c.created_at)}</p>
     <h1>${esc(h?.summary || '原資料を残しました。')}</h1>${label ? `<p class="status ${esc(c.job?.state)}">${esc(label)}</p>` : ''}
     ${c.pending_edit?'<p class="subtle">端末の訂正は未送信です。知見は保存先の前の版を表示しています。</p>':''}${c.from_cache?'<p class="subtle">端末に残した資料です。接続時に更新します。</p>':''}${c.local_only?`<p class="subtle">${c.local_conflict?'端末の原資料は残っています。保存状況から失敗内容を確認できます。':'端末の原資料を保存しました。接続後に自動送信・知見化します。'}</p>${c.local_error?`<p class="error">${esc(c.local_error)}</p>`:''}`:''}
-    ${['failed','blocked'].includes(c.job?.state) ? `<p class="subtle">${esc(errors[c.job.error_code] || '原資料は残っています。詳細から再試行できます。')}</p>` : ''}</div>
+    ${['failed','blocked'].includes(c.job?.state)&&c.job?.error_code!=='extraction_required' ? `<p class="subtle">${esc(errors[c.job.error_code] || '原資料は残っています。詳細から再試行できます。')}</p>` : ''}</div>
+    ${!h&&!c.local_only?`<section class="detail-section">${['pending','running'].includes(c.job?.state)?'<button id="cancel-extraction" class="quiet">抽出中 · 停止</button>':'<button id="extract" class="primary">抽出する · AI</button>'}</section>`:''}
     ${c.themes?.length?`<section class="detail-section"><p class="section-label">この記録が育てる問い</p>${c.themes.map(t=>`<a href="#" data-theme="${esc(t.id)}">${esc(t.question)}</a>`).join('<br>')}</section>`:''}
     ${h?'<section class="detail-section"><button id="find-related" class="primary">関連を探す</button><div id="related-candidates"></div></section>':''}
     ${h?'<details class="fold"><summary>周辺のつながりを読む・概念を整理する</summary><button id="open-neighborhood" class="quiet">この知見の周辺を開く</button></details>':''}
     ${h?'<details class="fold"><summary>問いを外部資料で確かめる</summary><button id="research-start" class="quiet">調べる</button></details>':''}
-    ${h ? `<section class="detail-section"><h2>拾った知見</h2>${h.claims.map(claim => `<div class="knowledge-item"><p><span class="origin">${({ source:'資料の主張', user:'自分の発言', ai:'AIの推論' })[claim.evidence.origin]} · ${({ explicit:'記録あり', inferred:'推論', uncertain:'不確か' })[claim.evidence.certainty]}</span></p>
+    ${h ? `<section class="detail-section"><h2>拾った知見</h2>${h.claims.slice(0,3).map(claim => `<div class="knowledge-item"><p><span class="origin">${({ source:'資料の主張', user:'自分の発言', ai:'AIの推論' })[claim.evidence.origin]} · ${({ explicit:'記録あり', inferred:'推論', uncertain:'不確か' })[claim.evidence.certainty]}</span></p>
       <p>${esc(claim.text)}</p>${claim.conditions.length ? `<p class="subtle">条件：${claim.conditions.map(esc).join('、')}</p>` : ''}${claim.evidence.quote ? `<blockquote>${esc(claim.evidence.quote)}</blockquote>` : ''}</div>`).join('')}
       ${h.concepts.length ? `<p class="concepts">${h.concepts.map(k => esc(k.name)).join(' · ')}</p>` : ''}</section>
-      ${h.questions.length ? `<section class="detail-section"><h2>考えの続き</h2>${h.questions.map(q => `<p>${esc(q.text)}</p>`).join('')}</section>` : ''}
+      ${h.questions.length ? `<section class="detail-section"><h2>考えの続き</h2>${h.questions.slice(0,3).map(q => `<p>${esc(q.text)}</p>`).join('')}</section>` : ''}
       ${graphMarkup(graph)}
       ${proposal ? `<section class="draft"><h2>見方への影響 · AIの修正案</h2><p class="subtle">${esc(proposal.reason)}</p><details class="fold"><summary>変更する箇所と理由を読む</summary><p class="subtle">いまの文章</p><p class="prose">${esc(proposal.from_text)}</p><p class="subtle">修正案</p><p class="prose">${esc(proposal.to_text)}</p><button class="quiet" data-hide="${esc(`proposal:${proposal.view_id}:${proposal.from_text}:${proposal.to_text}`)}">この案を表示しない</button></details>${proposal.stale?'<p class="subtle">現行の見方が変わっています。関連を探して案を更新できます。</p>':'<button id="adopt-proposal" class="quiet">この見方に更新</button>'}</section>` : h.view_draft ? `<section class="draft"><h2>${adopted ? '自分の見方に残しました' : '見方の案 · AIが考えたこと'}</h2><p class="prose">${esc(h.view_draft.text)}</p><p class="subtle">${esc(h.view_draft.reason)}</p>
       ${adopted ? `<a href="#" id="adopted-view">採用した見方と履歴を読む</a>` : '<button id="adopt" class="quiet">自分の見方にする</button>'}</section>` : ''}
@@ -311,8 +279,10 @@ function renderCapture() {
       ${c.note ? `<h3>自分の一言</h3><p class="prose">${esc(c.note)}</p>` : ''}
       ${c.source_published_at || c.source_subject_period ? `<p class="subtle">${c.source_published_at ? `公開・発行時期：${esc(c.source_published_at)}` : ''}${c.source_subject_period ? `<br>内容の対象時期：${esc(c.source_subject_period)}` : ''}</p>` : ''}</details>
     <details class="fold"><summary>訂正・補足など</summary><div class="secondary-links"><button id="correct">読み取り・出典を訂正</button><button id="supplement">写真・音声を補足</button>
-      ${h ? '<button id="ask">この資料について聞く</button><button id="hide-revisit">再訪候補に表示しない</button>' : ''}${['failed','blocked'].includes(c.job?.state) ? '<button id="retry">読み取りを再試行</button>' : ''}<button id="delete" class="danger">この記録を削除</button></div></details></article>`;
+      ${h ? '<button id="ask">この資料について聞く</button><button id="hide-revisit">再訪候補に表示しない</button>' : ''}${['failed','blocked'].includes(c.job?.state)&&c.job?.error_code!=='extraction_required' ? '<button id="retry">読み取りを再試行</button>' : ''}<button id="delete" class="danger">この記録を削除</button></div></details></article>`;
   wireHeader(); wireThemeLinks(); bind('#back', 'click', () => home().catch(e => showNotice(e.message)));
+  bind('#cancel-extraction','click',async()=>{try{await api(`/api/captures/${c.id}/cancel-extraction`,json('POST',{version:c.version}));await openCapture(c.id);}catch(e){showNotice(e.message);}});
+  bind('#extract','click',async event=>{event.target.disabled=true;try{await api(`/api/captures/${c.id}/extract`,json('POST',{version:c.version}));await openCapture(c.id);}catch(e){showNotice(e.message);event.target.disabled=false;}});
   bind('#find-related','click',async event=>{event.target.disabled=true;try{const r=await api('/api/book/discover',json('POST',{id:c.id,version:c.version,idempotency_key:crypto.randomUUID()}));showRelated(r,c);}catch(e){showNotice(e.message);}finally{event.target.disabled=false;}});
   if(h)api(`/api/book/discovery?anchor=${encodeURIComponent(c.id)}`).then(r=>{if(currentCapture?.id===c.id&&r)showRelated(r,c);}).catch(()=>{});
   bind('#adopt', 'click', async event => {
@@ -413,7 +383,7 @@ function notifyReflection(reflections){
 }
 function privacyDialog() {
   modal('AIと保存について', `<div class="privacy"><p>残した写真・音声・文章は、このアプリの非公開データとして保存します。</p>
-    <p>解析には、対象の原資料、自分の一言、前回の書名だけをOpenAIへ送ります。横断接続には、過去の関連候補を最大12記録・120ノードと、現行の見方を最大6件送ります。通常保存は読み取りまでです。関連探索とテーマの理解の更新は、ボタンで依頼した時だけ実行します。</p>
+    <p>解析には、対象の原資料、自分の一言、前回の書名だけをOpenAIへ送ります。横断接続には、過去の関連候補を最大12記録・120ノードと、現行の見方を最大6件送ります。保存時にはAIを実行しません。抽出は明示操作で開始します。関連探索とテーマの理解の更新は、ボタンで依頼した時だけ実行します。</p>
     <p>AIが作るのは知見と見方の案です。「自分の見方にする」を選んだ文章だけが、本人の見方として残ります。</p>
     <p class="subtle">${state?.ai_configured ? 'AI解析は設定済みです。' : 'AI解析は未設定です。原資料を保存して待ちます。'}<br>今日の呼び出し ${state?.usage.calls || 0} / ${state?.daily_limit || '—'}（UTC日次）。写真・文章は読み取りと横断整理で通常2回、${state?.ai?.mode==='chatgpt'?'音声は原資料の保存のみ。':'音声は文字起こしを含めて通常3回。'}<br>${state?.ai?.mode==='chatgpt' ? 'AI解析は ChatGPT のサブスク枠のみを使います。有料APIへの自動切り替えはありません。音声文字起こしと意味索引は使わず、検索は語句検索です。接続状態：'+esc(state.ai.state)+ '。' : '解析と意味索引は有料APIを使います。上限は呼び出し数です。'}</p>
     <p class="subtle">保存した記録と採用履歴から、区切り・日・週の振り返りを自動で整理します。最大20記録・10改訂をAI処理へ送ります。</p>
@@ -428,10 +398,6 @@ function privacyDialog() {
    catch(e){event.target.checked=false;try{localStorage.setItem('reflection-notifications','off');}catch{}$('#notification-error').textContent=e.message;}
   });
 }
-
-// Keep the tiny AI indicator accurate even while the user is reading another screen.
-setInterval(()=>refreshAiActivity(),3000);
-document.addEventListener('visibilitychange',()=>{if(!document.hidden)refreshAiActivity();});
 
 // Poll only small summaries. Never replace an open editor or an expanded source while reading.
 setInterval(async () => {
@@ -451,24 +417,7 @@ setInterval(async () => {
   finally { pollBusy = false; }
 }, 2500);
 
-async function start(){
-  try{
-    const response=await fetch('/api/auth-config',{credentials:'same-origin',cache:'no-store'});
-    if(response.redirected||[401,403].includes(response.status)){login();return;}
-    if(!response.ok)throw Error('Authentication configuration unavailable');
-    const config=await response.json();
-    if(!['password','cloudflare_access'].includes(config.auth_method))throw Error('Unknown authentication mode');
-    authMethod=config.auth_method; setDeviceAuthMethod(authMethod);
-    try{localStorage.setItem('book-auth-method',authMethod);}catch{}
-  }catch(error){
-    // An offline reading cache can still open; unknown mode never renders a password form.
-    if(navigator.onLine)throw error;
-    try{authMethod=localStorage.getItem('book-auth-method');}catch{}
-    setDeviceAuthMethod(authMethod);
-  }
-  await home();
-}
-start().catch(error => { if (![401,403].includes(error.status)) { app.innerHTML = '<p class="loading">接続を確認して、ページを開き直してください。</p>'; } });
+home().catch(error => { if (error.status !== 401) { app.innerHTML = '<p class="loading">接続を確認して、ページを開き直してください。</p>'; } });
 
 const importState=value=>({pending:'保存済み・取り込み待ち',running:'取り込み中',ready:'範囲を選択できます',completed:'取り込み済み',partial:'一部失敗・成功分は保存済み',failed:'取り込みできませんでした'})[value]||value;
 async function saveImport(files,reuse=null){
@@ -480,6 +429,7 @@ async function saveImport(files,reuse=null){
 async function openImport(jobId){
  const job=await api(`/api/imports/${jobId}`);currentCapture=null;currentView={id:jobId,import:true};
  app.innerHTML=`${header(false)}<button id="back" class="back">← 残したもの</button><article><div class="detail-head"><p class="eyebrow">取り込み</p><h1>${esc(job.metadata.title||job.name)}</h1><p class="status">${esc(importState(job.state))}</p><p class="subtle">保存 ${job.items.filter(i=>i.capture_id).length}件 ／ 選択 ${job.items.filter(i=>i.selected).length}件 ／ 範囲 ${job.items.length}件</p></div>
+ ${job.error_code==='extraction_required'?'<button id="import-extract" class="primary">抽出する · AI</button>':''}
  ${job.metadata.warnings?.length?`<details class="fold"><summary>取得できない範囲</summary>${job.metadata.warnings.map(w=>`<p class="subtle">${esc(w)}</p>`).join('')}</details>`:''}
  ${['pdf','epub'].includes(job.format)&&job.items.length?`<form id="import-select"><p class="subtle">読んだ箇所・知見化したい範囲だけ選択します。1回20件まで、1件は知見化・横断整理で通常2回のAI処理。未選択の本文はAIへ送りません。</p>${job.items.map(i=>`<details class="fold"><summary>${i.state==='deleted'?'削除済み':esc(i.locator||`範囲 ${i.ordinal}`)}${i.capture_id?' · 保存済み':''}</summary><p class="prose">${esc(i.preview||'本文取得不能')}</p>${i.state!=='deleted'&&!i.capture_id&&i.preview?`<label><input type="checkbox" name="ordinal" value="${i.ordinal}"> この範囲を取り込む</label>`:''}${i.capture_id?`<a href="#" data-import-capture="${i.capture_id}">知見と原文を読む</a>`:''}</details>`).join('')}<p id="import-error" class="error" role="alert"></p><button class="primary">選んだ範囲を残す</button></form>`:job.items.map(i=>`<div class="history"><p>${esc(i.locator||`項目 ${i.ordinal}`)} · ${esc(i.state==='saved'?'保存済み':i.state==='deleted'?'削除済み':i.state==='failed'?'失敗':'待機')}</p>${i.capture_id?`<a href="#" data-import-capture="${i.capture_id}">知見と原資料を読む</a>`:''}${i.error_code?`<p class="error">${esc(i.error_code)}</p>`:''}</div>`).join('')}
  ${job.format==='photos'?`<details class="fold"><summary>写真の順序を訂正</summary><form id="import-order"><label><span>写真番号を表示順に並べる</span><input id="import-order-list" value="${job.items.map(i=>i.ordinal).join(', ')}"></label><button class="quiet">順序を反映する</button></form></details>`:''}
@@ -487,6 +437,7 @@ async function openImport(jobId){
  wireHeader();bind('#back','click',()=>home().catch(e=>showNotice(e.message)));document.querySelectorAll('[data-import-capture]').forEach(el=>el.onclick=event=>{event.preventDefault();openCapture(el.dataset.importCapture).catch(e=>showNotice(e.message));});
  bind('#import-select','submit',async event=>{event.preventDefault();try{const ordinals=[...event.target.querySelectorAll('input:checked')].map(x=>Number(x.value));await api(`/api/imports/${job.id}/select`,json('POST',{ordinals}));await openImport(job.id);}catch(e){$('#import-error').textContent=e.message;}});
  bind('#import-order','submit',async event=>{event.preventDefault();try{await api(`/api/imports/${job.id}/order`,json('POST',{ordinals:$('#import-order-list').value.split(',').map(x=>Number(x.trim()))}));await openImport(job.id);}catch(e){showNotice(e.message);}});
+ bind('#import-extract','click',async event=>{event.target.disabled=true;try{await api(`/api/imports/${job.id}/extract`,json('POST',{}));await openImport(job.id);}catch(e){showNotice(e.message);event.target.disabled=false;}});
  bind('#import-retry','click',async()=>{try{await api(`/api/imports/${job.id}/retry`,json('POST',{}));await openImport(job.id);}catch(e){showNotice(e.message);}});
  bind('#import-delete','click',()=>{modal('取り込みを削除する',`<p>原ファイル、選択範囲と関連する読書記録を削除します。採用した見方と履歴は残ります。</p><button id="import-delete-confirm" class="primary">削除する</button>`);bind('#import-delete-confirm','click',async()=>{try{await api(`/api/imports/${job.id}`,json('DELETE',{}));closeDialog();await home();}catch(e){showNotice(e.message);}});});
  if(['pending','running'].includes(job.state))setTimeout(()=>{if(currentView?.import&&currentView.id===job.id&&!dialog.open)openImport(job.id).catch(e=>showNotice(e.message));},2500);
@@ -538,8 +489,9 @@ initDevice().then(()=>resume()).catch(e=>showNotice(e.message));
 
 
 function themeHome(index){
- if(!index)return '';const themes=(index.themes||[]).filter(t=>t.is_tip!==0);
- return `<section class="theme-home"><p class="section-label">問い</p>${themes.map(t=>{const r=t.result?JSON.parse(t.result):null;return `<button class="capture-row theme-row" data-theme="${esc(t.id)}"><h3>${esc(t.question)}</h3>${r?.understanding?.[0]?`<p>${esc(r.understanding[0].text)}</p>`:''}${t.stale?'<span class="status">根拠に変更あり</span>':''}</button>`;}).join('')}</section>`;
+ if(!index)return '';
+ const themes=index.themes||[],domains=index.domains||[];
+ return `<section class="theme-home" aria-label="育てている問い"><p class="section-label">育てている問い</p>${domains.map(d=>{const list=themes.filter(t=>JSON.parse(t.domain_ids||'[]').includes(d.id));return `<section class="theme-domain"><h2>${esc(d.name)}</h2>${list.map(t=>{const r=t.result?JSON.parse(t.result):null;return `<button class="capture-row theme-row" data-theme="${esc(t.id)}"><h3>${esc(t.question)}</h3><p>${esc(t.stale?'根拠が変わっています。更新前の理解です。':r?.understanding[0]?.text||(t.material_count?'材料が集まっています。テーマを開いて理解を更新できます。':'これから材料を集める問いです。'))}</p>${!t.stale&&r?.changed&&r?.change_reason?`<p class="subtle">今回の変化 · ${esc(r.change_reason)}</p>`:''}${['failed','blocked'].includes(t.job_state)?'<p class="subtle">整理は保留中です。保存した材料と以前の理解は読めます。</p>':''}</button>`;}).join('')}</section>`;}).join('')}</section>`;
 }
 function wireThemeLinks(){document.querySelectorAll('[data-theme]').forEach(el=>el.onclick=event=>{event.preventDefault();openTheme(el.dataset.theme).catch(e=>showNotice(e.message));});}
 async function openTheme(themeId,fromCapture=null){
@@ -548,17 +500,15 @@ async function openTheme(themeId,fromCapture=null){
  const r=t.result;
  const sections=[['understanding','現在の暫定理解'],['changes','最近起きている変化'],['competing','競合する説明'],['conditions','成立条件と反例'],['questions','次に確かめたい問い']];
  const proof=e=>{const p=t.evidence.find(p=>p.claim_id===e.claim_id);return p?`<blockquote>${esc(p.quote||'AIの推論・原文引用なし')}<p class="subtle">${esc(({source:'資料の主張',user:'本人の発言',ai:'AIの推論'})[p.origin])} · ${esc(p.source_title||'出典未確認')}${p.page?` · p.${esc(p.page)}`:''} · ${esc(({support:'説明の支持',counterexample:'反例',condition:'条件追加',example:'具体例',background:'背景',unresolved:'未解決'})[e.role])}</p><a href="#" data-theme-source="${esc(p.capture_id)}">原記録を読む</a></blockquote>`:'';};
- app.innerHTML=`${header(true,false)}<nav class="theme-nav"><button id="back" class="back">← 育てている問い</button>${fromCapture?'<button id="theme-origin-back" class="back">← 元の記録</button>':''}</nav><article><div class="detail-head"><h1>${esc(t.theme.question)}</h1>${t.stale?'<p class="status">原根拠が変更・削除されています。以下は更新前の理解です。有効な引用だけを表示しています。</p>':''}${t.job&&['failed','blocked'].includes(t.job.state)?`<p class="subtle">${esc(errors[t.job.error_code]||'整理を完了できませんでした。原資料と以前の理解は保存されています。')}</p>`:''}</div>
- ${r?sections.map(([key,label])=>r[key].length?`<section class="detail-section">${key==='understanding'?'':`<h2>${label}</h2>`}${r[key].map(e=>`<p class="prose">${esc(e.text)}</p><details class="fold"><summary>根拠</summary><p class="subtle">${e.interpretation==='ai'?'AIの仮説・整理':e.interpretation==='user'?'本人の発言':'資料が述べる説明'}${e.period?` · 対象時期 ${esc(e.period)}`:''}</p>${e.evidence.map(proof).join('')||'<p>現時点で有効な原根拠を確認できません。</p>'}</details>`).join('')}</section>`:'').join(''):''}
+ app.innerHTML=`${header()}<nav class="theme-nav"><button id="back" class="back">← 育てている問い</button>${fromCapture?'<button id="theme-origin-back" class="back">← 元の記録</button>':''}</nav><article><div class="detail-head"><p class="eyebrow">AIが整理した理解${t.revision?` · 第${t.revision}版`:''}</p><h1>${esc(t.theme.question)}</h1><p class="subtle">${esc(t.theme.scope)}</p>${t.stale?'<p class="status">原根拠が変更・削除されています。以下は更新前の理解です。有効な引用だけを表示しています。</p>':''}${t.job&&['failed','blocked'].includes(t.job.state)?`<p class="subtle">${esc(errors[t.job.error_code]||'整理を完了できませんでした。原資料と以前の理解は保存されています。')}</p>`:''}</div>
+ ${r?sections.map(([key,label])=>r[key].length?`<section class="detail-section"><h2>${label}</h2>${r[key].map(e=>`<p class="prose">${esc(e.text)}</p><p class="subtle">${e.interpretation==='ai'?'AIの仮説・整理':e.interpretation==='user'?'本人の発言':'資料が述べる説明'}${e.period?` · 対象時期 ${esc(e.period)}`:''}</p><details class="fold"><summary>根拠を読む</summary>${e.evidence.map(proof).join('')||'<p>現時点で有効な原根拠を確認できません。</p>'}</details>`).join('')}</section>`:'').join(''):'<section class="detail-section"><p>まだ統合知見はありません。記録から「関連を探す」で材料を選べます。</p></section>'}
  ${r?.changed&&r?.change_reason?`<section class="detail-section"><h2>今回の理解の変化</h2><p>${esc(r.change_reason)}</p></section>`:''}
  ${t.history.length?`<details class="fold"><summary>理解が変わった理由</summary>${t.history.map(h=>`<p>第${h.version}版 · ${date(h.created_at)}<br>${esc(h.change_reason)}</p>`).join('')}</details>`:''}
  ${t.relations.length?`<section class="detail-section"><h2>ほかの問いとのつながり</h2>${t.relations.map(x=>{const p=JSON.parse(x.payload);return `<p>${esc(p.common_structure)}</p><p class="subtle">違い：${esc(p.important_difference)}</p><a href="#" data-theme="${esc(x.to_theme)}">つながるテーマを読む</a>`;}).join('')}</section>`:''}
  ${t.proposals.length?`<details class="fold"><summary>自分の見方への案</summary><p class="subtle">採用したときだけ、自分の見方に保存します。</p>${t.proposals.map(p=>`<p class="prose">${esc(p.to_text)}</p><p>${esc(p.reason)}</p><button class="quiet" data-theme-adopt="${p.id}">この見方を採用する</button><button class="quiet" data-theme-hide="${p.id}">この案を表示しない</button>`).join('')}</details>`:''}
  ${t.views.length?`<section class="detail-section"><h2>自分が採用した見方</h2>${t.views.map(v=>`<a href="#" data-theme-view="${v.id}">${esc(v.body)}</a>`).join('<br>')}</section>`:''}
- <button id="find-related" class="primary">関連を探す</button><section id="related-candidates"></section>
- ${t.parents?.length?`<nav class="theme-nav">${t.parents.map(p=>`<button class="back" data-theme="${esc(p.id)}">↑ ${esc(p.question)}</button>`).join('')}</nav>`:''}
- <section class="knowledge-branch">${(t.children?.length?t.children:t.materials.map(m=>({child_kind:'capture',child_id:m.capture_id,title:'記録'}))).map(m=>`<button class="capture-row" ${m.child_kind==='theme'?`data-theme="${esc(m.child_id)}"`:`data-theme-source="${esc(m.child_id)}"`}>${esc(m.title)}</button>`).join('')}</section></article>`;
- bind('#find-related','click',async event=>{event.target.disabled=true;try{const r=await api('/api/book/discover',json('POST',{id:themeId,version:t.theme.version,idempotency_key:crypto.randomUUID()}));showRelated(r,{id:themeId,kind:'theme'});}catch(e){showNotice(e.message);}finally{event.target.disabled=false;}});
+ <button id="theme-rebuild" class="quiet">理解を更新する</button><details class="fold"><summary>この問いに集まった記録</summary>${t.materials.map(m=>`<p>${esc(m.reason)}<br><a href="#" data-theme-source="${m.capture_id}">原記録を読む</a></p>`).join('')||'<p>まだ関連する記録はありません。</p>'}</details></article>`;
+ bind('#theme-rebuild','click',async event=>{event.target.disabled=true;try{await api(`/api/themes/${encodeURIComponent(themeId)}/rebuild`,json('POST',{version:t.theme.version,idempotency_key:crypto.randomUUID()}));await openTheme(themeId);showNotice('理解の更新を予約しました。');}catch(e){showNotice(e.message);event.target.disabled=false;}});
  wireHeader();wireThemeLinks();bind('#back','click',()=>home().catch(e=>showNotice(e.message)));bind('#theme-origin-back','click',()=>openCapture(fromCapture));
  document.querySelectorAll('[data-theme-source]').forEach(el=>el.onclick=async event=>{event.preventDefault();await openCapture(el.dataset.themeSource);const parent=document.createElement('button');parent.className='back';parent.textContent='← この根拠を使うテーマ';parent.onclick=()=>openTheme(themeId,currentCapture?.id);$('#back').after(parent);});
  document.querySelectorAll('[data-theme-view]').forEach(el=>el.onclick=event=>{event.preventDefault();openView(el.dataset.themeView).catch(e=>showNotice(e.message));});
@@ -570,8 +520,8 @@ function showRelated(run,c){
  if(run.state!=='completed'){target.innerHTML='<p class="subtle">探索中、または中断しています。</p>';return;}
  const labels={common:'共通',support:'補強',counterexample:'反例',condition:'条件',analogy:'別分野の共通構造',question:'問い'};
  const storageKey=`related:${run.id}`;let selected;try{selected=JSON.parse(sessionStorage.getItem(storageKey));}catch{}if(!Array.isArray(selected))selected=run.candidates.map(x=>x.id);
- target.innerHTML=`${run.candidates.length?run.candidates.map(x=>`<label><input type="checkbox" data-related-select="${esc(x.id)}" ${selected.includes(x.id)?'checked':''}> ${esc(x.title)}<br><span class="subtle">${labels[x.relation]} · ${esc(x.reason)}</span></label><details class="fold"><summary>内容</summary><p class="prose">${esc(x.text)}</p><a href="#" data-related-open="${esc(x.id)}">記録を開く</a></details>`).join(''):'<p class="subtle">有用な関連は見つかりませんでした。</p>'}<p class="subtle">${esc(run.destination.question)}</p>${run.retained_evidence?.length?`<details class="fold"><summary>引き継ぐ既存根拠（${run.retained_evidence.length}件）</summary>${run.retained_evidence.map(e=>`<p>${esc(e.title)}</p>`).join('')}</details>`:''}${c.kind==='theme'?'<select id="integration-mode" aria-label="統合先"><option value="deepen">この問いを深める</option><option value="parent">新しい問いへつなぐ</option></select>':''}<button id="integrate-related" class="primary"></button>`;
+ target.innerHTML=`${run.candidates.length?run.candidates.map(x=>`<label><input type="checkbox" data-related-select="${esc(x.id)}" ${selected.includes(x.id)?'checked':''}> ${esc(x.title)}<br><span class="subtle">${labels[x.relation]} · ${esc(x.reason)}</span></label><details class="fold"><summary>原資料を読む</summary><p class="prose">${esc(x.text)}</p><a href="#" data-related-open="${esc(x.id)}">記録を開く</a></details>`).join(''):'<p class="subtle">有用な関連は見つかりませんでした。</p>'}<p class="subtle">${esc(run.destination.question)}</p>${run.retained_evidence?.length?`<details class="fold"><summary>引き継ぐ既存根拠（${run.retained_evidence.length}件）</summary>${run.retained_evidence.map(e=>`<p>${esc(e.title)}</p>`).join('')}</details>`:''}<button id="integrate-related" class="primary"></button>`;
  const ids=()=>[...target.querySelectorAll('[data-related-select]:checked')].map(x=>x.dataset.relatedSelect);
- const update=()=>{sessionStorage.setItem(storageKey,JSON.stringify(ids()));$('#integrate-related').textContent=`${1+ids().length}件を統合する`;};target.querySelectorAll('[data-related-select]').forEach(x=>x.addEventListener('change',update));update();target.querySelectorAll('[data-related-open]').forEach(x=>x.addEventListener('click',e=>{e.preventDefault();x.dataset.relatedOpen.startsWith('theme:')?openTheme(x.dataset.relatedOpen):openCapture(x.dataset.relatedOpen);}));
- bind('#integrate-related','click',async event=>{event.target.disabled=true;const selectedIds=ids();const mode=$('#integration-mode')?.value;const actionKey=`integration:${run.id}:${mode||''}:${selectedIds.slice().sort().join(',')}`;let key=sessionStorage.getItem(actionKey);if(!key){key=crypto.randomUUID();sessionStorage.setItem(actionKey,key);}try{const r=await api('/api/book/integrate',json('POST',{discovery_id:run.id,selected_ids:selectedIds,...mode?{mode}:{},idempotency_key:key}));if(r.state==='completed')await openTheme(r.theme_id);else showNotice('処理中、または中断しています。');}catch(e){showNotice(e.message);}finally{event.target.disabled=false;}});
+ const update=()=>{sessionStorage.setItem(storageKey,JSON.stringify(ids()));$('#integrate-related').textContent=`${1+ids().length}件を統合する`;};target.querySelectorAll('[data-related-select]').forEach(x=>x.addEventListener('change',update));update();target.querySelectorAll('[data-related-open]').forEach(x=>x.addEventListener('click',e=>{e.preventDefault();openCapture(x.dataset.relatedOpen);}));
+ bind('#integrate-related','click',async event=>{event.target.disabled=true;const selectedIds=ids();const actionKey=`integration:${run.id}:${selectedIds.slice().sort().join(',')}`;let key=sessionStorage.getItem(actionKey);if(!key){key=crypto.randomUUID();sessionStorage.setItem(actionKey,key);}try{const r=await api('/api/book/integrate',json('POST',{discovery_id:run.id,selected_ids:selectedIds,idempotency_key:key}));if(r.state==='completed')await openTheme(r.theme_id);else showNotice('処理中、または中断しています。');}catch(e){showNotice(e.message);}finally{event.target.disabled=false;}});
 }

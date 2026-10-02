@@ -14,6 +14,8 @@ import {HttpError,fail,text,version,jsonBody,stmt,rows,getCapture,jobStatement,r
 import {loggedIn,login,logout,accessAuthorized} from './auth.ts';
 import {captureInput,requestKey,stageAsset,type Input} from './input.ts';
 import {dispatch,cleanup,consume} from './queue.ts';
+import {startImportExtraction} from './imports.ts';
+import {startExtraction} from './extraction.ts';
 import {storeCapture} from './capture-storage.ts';
 import {answer,AiError} from './ai.ts';
 import {readGraph,rebuildGraph} from './graph.ts';
@@ -190,7 +192,7 @@ function exportData(env:Env){
  const stream=new ReadableStream<Uint8Array>({async start(controller){
   try{
    controller.enqueue(encoder.encode(`{"format":"book-harvester/v1","exported_at":${JSON.stringify(new Date().toISOString())}`));
-   for(const table of ['knowledge_inputs','discovery_runs','integration_runs','sources','captures','capture_revisions','harvests','answers','views','view_revisions','asset_transcripts','assets','graph_jobs','graph_generations','graph_nodes','concepts','concept_mentions','graph_relations','graph_dependencies','view_proposals','graph_overrides','reading_sessions','reading_session_members','reflection_jobs','reflections','revisit_state','import_jobs','import_items','bibliography_jobs','research_runs','research_materials','external_source_index','embeddings','embedding_jobs','concept_overrides','concept_edits','capture_tombstones','sync_events','domains','lenses','themes','theme_domains','theme_memberships','theme_revisions','theme_syntheses','synthesis_evidence','theme_claim_relations','theme_relations','theme_view_links','theme_overrides','theme_proposals','theme_history','theme_dependencies','theme_member_lenses','theme_analysis_drafts','theme_changes','capture_visibility']){
+   for(const table of ['discovery_runs','integration_runs','sources','captures','capture_revisions','harvests','answers','views','view_revisions','asset_transcripts','assets','graph_jobs','graph_generations','graph_nodes','concepts','concept_mentions','graph_relations','graph_dependencies','view_proposals','graph_overrides','reading_sessions','reading_session_members','reflection_jobs','reflections','revisit_state','import_jobs','import_items','bibliography_jobs','research_runs','research_materials','external_source_index','embeddings','embedding_jobs','concept_overrides','concept_edits','capture_tombstones','sync_events','domains','lenses','themes','theme_domains','theme_memberships','theme_revisions','theme_syntheses','synthesis_evidence','theme_claim_relations','theme_relations','theme_view_links','theme_overrides','theme_proposals','theme_history','theme_dependencies','theme_member_lenses','theme_analysis_drafts','theme_changes','capture_visibility']){
     controller.enqueue(encoder.encode(`,${JSON.stringify(table)}:[`));let offset=0,first=true;
     while(true){
      const records=await rows<Record<string,unknown>>(env,`SELECT * FROM ${table} ORDER BY rowid LIMIT 50 OFFSET ?`,offset);
@@ -223,8 +225,6 @@ function exportData(env:Env){
 
 export async function route(request:Request,env:Env,ctx:ExecutionContext,trustedService=false):Promise<Response>{
  const url=new URL(request.url),path=url.pathname,method=request.method;
- // Public bootstrap contains only the UI authentication mode, never identity or records.
- if(path==='/api/auth-config'&&method==='GET')return json({auth_method:env.ACCESS_AUD?'cloudflare_access':'password'},200,{'Cache-Control':'no-store'});
  if(!trustedService&&env.ACCESS_AUD&&!await accessAuthorized(env,ctx,request))fail(403,'Cloudflareで本人のアカウントにログインしてください。');
  if(!['GET','HEAD'].includes(method)&&request.headers.get('origin')!==env.APP_ORIGIN)fail(403,'この画面から操作し直してください。');
  if(path==='/healthz'&&method==='GET')return json({ok:true});
@@ -250,10 +250,6 @@ export async function route(request:Request,env:Env,ctx:ExecutionContext,trusted
  if(themeMatch){const themeId=decodeURIComponent(themeMatch[1]);if(!themeMatch[2]&&method==='PATCH')return json(await editTheme(env,themeId,await jsonBody(request.clone())));if(themeMatch[2]==='merge'&&method==='POST')return json(await mergeTheme(env,themeId,await jsonBody(request.clone())));if(themeMatch[2]==='overrides'&&method==='POST')return json(await overrideTheme(env,themeId,await jsonBody(request.clone())));if(!themeMatch[2]&&method==='GET')return json(await readTheme(env,themeId));if(themeMatch[2]==='history'&&method==='GET'){const detail=await readTheme(env,themeId);return json(await rows(env,'SELECT * FROM theme_revisions WHERE theme_id=? ORDER BY version DESC LIMIT 20',themeId));}if(themeMatch[2]==='proposals'&&method==='POST')return json(await actThemeProposal(env,themeId,await jsonBody(request.clone())));}
  if(path==='/api/sync'&&method==='GET')return json(await syncDelta(env,url.searchParams.get('cursor')));
  if(path==='/api/logout'&&method==='POST')return json({ok:true,...(env.ACCESS_AUD?{redirect:'/cdn-cgi/access/logout'}:{})},200,{'Set-Cookie':await logout(request,env)});
- if(path==='/api/ai-activity'&&method==='GET'){
-  const active=await stmt(env,`SELECT count(*) AS n FROM (SELECT state,created_at FROM ai_calls ORDER BY rowid DESC LIMIT 20) WHERE state='started' AND created_at>?`,now()-120000).first<number>('n');
-  return json({active:Boolean(active),count:active||0});
- }
  if(path==='/api/state'&&method==='GET'){
   const day=new Date().toISOString().slice(0,10),search=(url.searchParams.get('q')||'').slice(0,200),semantic=await semanticSearch(env,search),filters={source:(url.searchParams.get('source')||'').slice(0,200),year:/^\d{4}$/.test(url.searchParams.get('year')||'')?url.searchParams.get('year')!:'',origin:['source','user','ai'].includes(url.searchParams.get('origin')||'')?url.searchParams.get('origin')!:''};
   const [captures,views,current,usage,reflections,revisits,imports]=await Promise.all([
@@ -268,7 +264,7 @@ export async function route(request:Request,env:Env,ctx:ExecutionContext,trusted
  if(path==='/api/captures'&&method==='POST'){
   const saved=await saveCapture(request,env);ctx.waitUntil(dispatch(env));return saved;
  }
- const match=/^\/api\/captures\/([a-f0-9-]{36})(?:\/(assets|retry|adopt|ask|proposal|hide))?$/.exec(path);
+ const match=/^\/api\/captures\/([a-f0-9-]{36})(?:\/(assets|extract|cancel-extraction|retry|adopt|ask|proposal|hide))?$/.exec(path);
  if(match){
   const [,captureId,action]=match;
   if(!action&&method==='GET'){const c=await getCapture(env,captureId);if(!c)fail(404,'記録が見つかりません。');return json({...c,membership_job:await stmt(env,"SELECT id,version,state,error_code FROM theme_jobs WHERE kind='membership' AND target_id=? AND version=?",c.id,c.version).first(),themes:await captureThemes(env,c.id),graph:await readGraph(env,c.id,c.version),import_ref:await stmt(env,'SELECT i.job_id,i.ordinal,i.locator,j.name FROM import_items i JOIN import_jobs j ON j.id=i.job_id WHERE i.capture_id=?',c.id).first(),bibliography:c.source_bibliography?JSON.parse(c.source_bibliography):null});}
@@ -297,12 +293,8 @@ export async function route(request:Request,env:Env,ctx:ExecutionContext,trusted
    if(!saved.meta.changes)fail(409,'回答中に資料が更新されました。開き直してください。');
    return json({...result,capture_id:c.id,capture_version:c.version});
   }
-  if(action==='retry'&&method==='POST'){
-   const input=await jsonBody(request.clone());
-   const change=await stmt(env,`UPDATE jobs SET state='pending',attempts=0,error_code=NULL,available_at=?,dispatched_at=NULL
-    WHERE capture_id=? AND version=? AND version=(SELECT version FROM captures WHERE id=?) AND state IN('blocked','failed')`,now(),captureId,version(input.version),captureId).run();
-   if(!change.meta.changes)fail(409,'記録が更新されたか、処理中です。');ctx.waitUntil(dispatch(env));return json({ok:true});
-  }
+  if(action==='cancel-extraction'&&method==='POST'){const input=await jsonBody(request.clone()),v=version(input.version);await env.DB.batch([stmt(env,"DELETE FROM explicit_ai_actions WHERE kind='extract' AND target_id=? AND version=?",captureId,v),stmt(env,"UPDATE jobs SET state='blocked',error_code='extraction_required',lease_token=NULL,dispatched_at=NULL WHERE capture_id=? AND version=? AND state IN('pending','running','blocked')",captureId,v)]);return json({ok:true});}
+  if((action==='extract'||action==='retry')&&method==='POST'){const input=await jsonBody(request.clone());return json(await startExtraction(env,ctx,captureId,version(input.version)),202);}
  }
  const assetMatch=/^\/api\/assets\/([a-f0-9-]{36})$/.exec(path);
  if(assetMatch&&method==='GET'){
@@ -347,10 +339,11 @@ export async function route(request:Request,env:Env,ctx:ExecutionContext,trusted
  if(researchMatch){const r=await readResearch(env,researchMatch[1]);if(!r)fail(404,'調査がありません。');if(!researchMatch[2]&&method==='GET')return json(r);if(method==='POST'&&researchMatch[2]==='cancel'){await cancelResearch(env,r.id);return json({ok:true});}if(method==='POST'&&researchMatch[2]==='retry'){await retryResearch(env,r.id);ctx.waitUntil(dispatch(env));return json({ok:true});}}
  if(path==='/api/export'&&method==='GET')return exportData(env);
  if(path==='/api/imports'&&method==='POST'){const saved=await receiveImport(request,env);ctx.waitUntil(dispatch(env));return json(saved,saved.duplicate?200:201);}
- const importMatch=/^\/api\/imports\/([a-f0-9-]{36})(?:\/(select|retry|original|order)(?:\/(\d+))?)?$/.exec(path);
+ const importMatch=/^\/api\/imports\/([a-f0-9-]{36})(?:\/(extract|select|retry|original|order)(?:\/(\d+))?)?$/.exec(path);
  if(importMatch){
   const job=await readImport(env,importMatch[1]);if(!job)fail(404,'取り込みがありません。');const action=importMatch[2];
   if(!action&&method==='GET')return json(job);
+  if(action==='extract'&&method==='POST'){const result=await startImportExtraction(env,job.id);ctx.waitUntil(dispatch(env));return json(result,202);}
   if(action==='original'&&method==='GET'){const original=await importOriginal(env,job.id,importMatch[3]?Number(importMatch[3]):null);if(!original)fail(404,'原ファイルがありません。');return original;}
   if(action==='select'&&method==='POST'){const input=await jsonBody(request.clone());if(!Array.isArray(input.ordinals)||input.ordinals.some(n=>!Number.isInteger(n)))fail(400,'取り込む範囲を選んでください。');await selectImport(env,job.id,input.ordinals as number[]);ctx.waitUntil(dispatch(env));return json({ok:true},202);}
   if(action==='order'&&method==='POST'){const input=await jsonBody(request.clone());if(job.format!=='photos'||!Array.isArray(input.ordinals))fail(400,'写真番号を指定してください。');await reorderImport(env,job.id,input.ordinals as number[]);return json({ok:true});}

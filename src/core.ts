@@ -48,8 +48,8 @@ export async function getCapture(env:Env, captureId:string) {
  ]);
  return {...capture,job,harvest:h?JSON.parse(h.result) as Harvest:null,assets,views};
 }
-export const jobStatement = (env:Env,captureId:string,revision:number,mutation:string) => stmt(env,`INSERT INTO jobs(id,capture_id,version,available_at,created_at)
- SELECT ?,id,version,?,? FROM captures WHERE id=? AND version=? AND mutation_id=?`,id(),now(),now(),captureId,revision,mutation);
+export const jobStatement = (env:Env,captureId:string,revision:number,mutation:string) => stmt(env,`INSERT INTO jobs(id,capture_id,version,available_at,created_at,state,error_code)
+ SELECT ?,id,version,?,?,'blocked','extraction_required' FROM captures WHERE id=? AND version=? AND mutation_id=?`,id(),now(),now(),captureId,revision,mutation);
 export const revisionStatement = (env:Env,captureId:string,mutation:string) => stmt(env,`INSERT INTO capture_revisions(capture_id,version,corrected_text,note,source_id,page,created_at)
  SELECT id,version,corrected_text,note,source_id,page,? FROM captures WHERE id=? AND mutation_id=?`,now(),captureId,mutation);
 
