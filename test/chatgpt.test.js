@@ -1,11 +1,36 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {fixture} from './helpers.js';
-import {call,AiError} from '../src/ai.ts';
+import {call,AiError,responseJson} from '../src/ai.ts';
+import {drilldown} from '../src/drilldown.ts';
+import {discoverRecords} from '../src/discovery.ts';
 import {completedResponse,credentials,chatgptStatus,disconnectChatgpt,subscriptionPayload} from '../src/chatgpt.ts';
 import {authorizationUrl,callbackCode} from '../scripts/connect-chatgpt.mjs';
 const seed=()=>({id:crypto.randomUUID(),key:Buffer.alloc(32,7).toString('base64url'),client_id:'oaiapp_test',host_id:'urn:uuid:test',subject:'owner',email:'owner@example.com',access_token:'subscription-access',refresh_token:'subscription-refresh',expires_at:Date.now()+3600000,model:'allowed-model',scope:'resource.invoke chatgpt.tokens.use.direct',revocation_endpoint:'https://auth.openai.com/revoke'});
 const stream=events=>new Response(events.map(e=>`data: ${JSON.stringify(e)}\n\n`).join(''),{headers:{'Content-Type':'text/event-stream'}});
+test('completed streamed items survive a terminal response without output; incomplete streams never succeed',async()=>{
+ const item={id:'msg_1',type:'message',status:'completed',role:'assistant',content:[{type:'output_text',text:'{"ok":true}'}]};
+ const done={type:'response.output_item.done',output_index:0,item};
+ for(const output of [null,[],undefined])assert.deepEqual(responseJson(await completedResponse(stream([done,{type:'response.completed',response:{status:'completed',output}}]))),{ok:true});
+ await assert.rejects(completedResponse(stream([done])),e=>e.code==='subscription_interrupted_stream');
+ await assert.rejects(completedResponse(stream([done,{type:'response.incomplete',response:{status:'incomplete'}}])));
+ const final={...item,content:[{type:'output_text',text:'{"final":true}'}]};
+ assert.deepEqual(responseJson(await completedResponse(stream([done,{type:'response.completed',response:{status:'completed',output:[final]}}]))),{final:true});
+ assert.throws(()=>responseJson({status:'completed',output:[]}),e=>e.code==='empty_output');
+ assert.throws(()=>responseJson({output:[{content:[{type:'output_text',text:'{'}]}]}),e=>e.code==='invalid_output');
+ assert.throws(()=>responseJson({output:[{content:[{type:'refusal'}]}]}),e=>e.code==='refused');
+});
+test('subscription discovery and drilldown consume streamed JSON before sparse completion',async t=>{
+ const f=await fixture();t.after(f.close);f.env.AI_AUTH_MODE='chatgpt';f.env.CHATGPT_SESSION=JSON.stringify(seed());
+ const provider=async(_,options)=>{
+  const body=JSON.parse(options.body),input=JSON.parse(body.input[0].content[0].text);
+  const value=body.text.format.name==='question_drilldown_v1'?{candidates:[{question:'条件は何か？',content:'条件を比較',reason:'境界の検証',target:'selected',opposite_id:null},{question:'反例はあるか？',content:'反例を比較',reason:'仮説の検証',target:'selected',opposite_id:null}]}:{candidates:[],destination:{theme_id:input.anchor.id,question:input.anchor.title,scope:'対象の条件',exclusions:'',content:null}};
+  return stream([{type:'response.output_text.delta',output_index:0,content_index:0,delta:JSON.stringify(value)},{type:'response.output_item.done',output_index:0,item:{id:'msg_1',type:'message',status:'completed',content:[{type:'output_text',text:JSON.stringify(value)}]}},{type:'response.completed',response:{status:'completed',output:null}}]);
+ };
+ const run=await discoverRecords(f.env,{id:'theme:work',version:1,idempotency_key:'sse-discovery-regression'},provider);assert.equal(run.state,'completed');
+ assert.equal((await drilldown(f.env,'theme:work',{version:1},provider)).candidates.length,2);
+ assert.equal(f.db.prepare('SELECT count(*) n FROM themes').get().n,6);assert.equal(f.db.prepare('SELECT count(*) n FROM theme_revisions').get().n,0);
+});
 test('missing Content-Type accepts completed JSON and chunked SSE only',async()=>{
  const completed={object:'response',status:'completed',output:[]};
  const body=chunks=>new ReadableStream({start(controller){for(const chunk of chunks)controller.enqueue(new TextEncoder().encode(chunk));controller.close();}});
