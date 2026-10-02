@@ -1,5 +1,6 @@
 import {setDeviceAuthMethod,deviceRequest,initDevice,cacheRecent,pendingOperations,discardOperation,clearReadingCache,exportDevice,discardAllOutbox,resolveConflict,resume,lockDevice,deviceSettings,setDeviceSettings} from './offline.js';
 import {createAiActivity} from './ai-activity.js';
+import {mountDrilldown,clearDrilldowns} from './drilldown-panel.js';
 const app = document.querySelector('#app');
 const dialog = document.querySelector('#dialog');
 const notice = document.querySelector('#notice');
@@ -117,7 +118,7 @@ async function api(path,options={}){
     return result;
   }catch(error){
     if(taskId)aiActivity.update(taskId,{state:'failed',error:error.message});
-    if([401,403].includes(error.status)&&path!=='/api/login'){aiActivity.clear();aiWatches.clear();closeDialog();login();}throw error;
+    if([401,403].includes(error.status)&&path!=='/api/login'){aiActivity.clear();aiWatches.clear();clearDrilldowns();closeDialog();login();}throw error;
   }
 }
 
@@ -167,7 +168,7 @@ function wireHeader() {
   if($('#search-origin'))$('#search-origin').value=searchFilters.origin;for(const key of ['source','year','origin'])bind(`#search-${key}`,'input',event=>{searchFilters[key]=event.target.value;clearTimeout(searchTimer);searchTimer=setTimeout(async()=>{try{state=await api(searchPath());renderFeed();}catch(e){showNotice(e.message);}},400);});
   bind('#privacy', 'click', privacyDialog);
   bind('#device-menu','click',devicePendingDialog);
-  bind('#logout', 'click', async () => { try { const result=await api('/api/logout', json('POST', {})); aiActivity.clear();aiWatches.clear();await lockDevice();if(result.redirect){location.assign(result.redirect);return;}login(); } catch (e) { showNotice(e.message); } });
+  bind('#logout', 'click', async () => { try { const result=await api('/api/logout', json('POST', {})); aiActivity.clear();aiWatches.clear();clearDrilldowns();await lockDevice();if(result.redirect){location.assign(result.redirect);return;}login(); } catch (e) { showNotice(e.message); } });
 }
 
 async function home() {
@@ -665,23 +666,8 @@ async function openQuestionRelations(themeId,version,initialRun=null){
 }
 
 function openDrilldown(themeId,version,initialRun=null){
- let run=initialRun;const selected=new Set(),saved=new Map();
- modal('深掘り',`<form id="drilldown-form"><label><span>方向（任意）</span><input id="drilldown-direction" maxlength="1000"></label><button class="primary">AIで候補を出す</button></form><p id="drilldown-error" class="error"></p><section id="drilldown-candidates"></section><form id="drilldown-manual" hidden><label><span>主題</span><input id="drilldown-title" maxlength="200" required></label><label><span>内容（任意）</span><textarea id="drilldown-content" maxlength="10000"></textarea></label><button class="quiet">候補に追加</button></form><button id="drilldown-link" class="primary" hidden>選んだ問いをつなぐ</button>`);
- const candidates=$('#drilldown-candidates'),form=$('#drilldown-form'),error=$('#drilldown-error');
- const render=()=>{
-  if(!candidates.isConnected)return;
-  $('#drilldown-candidates').innerHTML=run.candidates.map((c,i)=>`<section><label><input type="checkbox" data-drilldown-select="${i}" ${selected.has(i)?'checked':''} ${saved.has(i)?'disabled':''}> 選択</label><input aria-label="主題" data-drilldown-question="${i}" maxlength="200" value="${esc(c.question)}" ${saved.has(i)?'disabled':''}><textarea aria-label="内容" data-drilldown-content="${i}" maxlength="10000" ${saved.has(i)?'disabled':''}>${esc(c.content||'')}</textarea><select aria-label="接続先" data-drilldown-target="${i}" ${saved.has(i)?'disabled':''}><option value="selected" ${(c.target||'selected')==='selected'?'selected':''}>選択した問い</option>${(run.oppositions||[]).flatMap(o=>['opposite','both'].map(target=>`<option value="${target}:${esc(o.id)}" ${c.target===target&&c.opposite_id===o.id?'selected':''}>${target==='both'?'両方':'対立側'}：${esc(o.question)}</option>`)).join('')}</select><p class="subtle">${esc(c.origin==='user'?'手動':c.reason)}</p>${saved.has(i)?`<button class="back" data-drilldown-open="${esc(saved.get(i))}">開く</button>`:''}</section>`).join('');
-  $('#drilldown-manual').hidden=false;$('#drilldown-link').hidden=false;$('#drilldown-link').disabled=![...selected].some(i=>!saved.has(i));
-  document.querySelectorAll('[data-drilldown-question]').forEach(b=>b.oninput=()=>run.candidates[Number(b.dataset.drilldownQuestion)].question=b.value);
-  document.querySelectorAll('[data-drilldown-content]').forEach(b=>b.oninput=()=>run.candidates[Number(b.dataset.drilldownContent)].content=b.value);
-  document.querySelectorAll('[data-drilldown-target]').forEach(b=>b.onchange=()=>{const c=run.candidates[Number(b.dataset.drilldownTarget)],split=b.value.indexOf(':');c.target=split<0?'selected':b.value.slice(0,split);c.opposite_id=split<0?null:b.value.slice(split+1);});
-  document.querySelectorAll('[data-drilldown-select]').forEach(b=>b.onchange=()=>{const i=Number(b.dataset.drilldownSelect);b.checked?selected.add(i):selected.delete(i);$('#drilldown-link').disabled=![...selected].some(i=>!saved.has(i));});
-  document.querySelectorAll('[data-drilldown-open]').forEach(b=>b.onclick=()=>{closeDialog();openTheme(b.dataset.drilldownOpen);});
- };
- bind('#drilldown-form','submit',async e=>{e.preventDefault();e.submitter.disabled=true;try{run=await api(`/api/themes/${encodeURIComponent(themeId)}/drilldown`,{...json('POST',{version,direction:$('#drilldown-direction').value}),aiActivity:{open:result=>result?openDrilldown(themeId,version,result):openTheme(themeId)}});run.candidates.forEach((_,i)=>selected.add(i));render();form.hidden=true;}catch(err){error.textContent=err.message;e.submitter.disabled=false;}});
- bind('#drilldown-manual','submit',async e=>{e.preventDefault();e.submitter.disabled=true;try{const edits=run.candidates;run=await api(`/api/themes/${encodeURIComponent(themeId)}/drilldown/candidates`,json('POST',{run_id:run.id,question:$('#drilldown-title').value,content:$('#drilldown-content').value}));edits.forEach((c,i)=>run.candidates[i]=c);selected.add(run.candidates.length-1);e.target.reset();render();}catch(err){$('#drilldown-error').textContent=err.message;}finally{e.submitter.disabled=false;}});
- bind('#drilldown-link','click',async e=>{e.target.disabled=true;$('#drilldown-error').textContent='';try{for(const i of selected){if(saved.has(i))continue;const child=await api(`/api/themes/${encodeURIComponent(themeId)}/drilldown/save`,json('POST',{run_id:run.id,candidate_index:i,candidate:{...run.candidates[i],content:run.candidates[i].content||''}}));saved.set(i,child.id);}render();}catch(err){$('#drilldown-error').textContent=err.message;render();}});
- if(run){run.candidates.forEach((_,i)=>selected.add(i));render();form.hidden=true;}
+ modal('深掘り','<div id="drilldown-panel"></div>');
+ mountDrilldown($('#drilldown-panel'),{themeId,version,initialRun,api,open:openDrilldown,openTheme:id=>{closeDialog();openTheme(id);}});
 }
 
 function showRelated(run,c){

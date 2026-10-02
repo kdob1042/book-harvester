@@ -1,6 +1,6 @@
 import {readProposals,generateProposals,executeProposals} from './integration-proposals.ts';
 import {suggestRelations,saveRelation,removeOpposition} from './question-relations.ts';
-import {drilldown,saveDrilldown,addDrilldownCandidate} from './drilldown.ts';
+import {drilldown,saveDrilldown,addDrilldownCandidate,readDrilldown} from './drilldown.ts';
 import {callBook} from './book-operations.ts';
 import {readDiscovery,latestDiscovery,integrateRecords} from './discovery.ts';
 import {automaticAI,authorizeAI} from './ai-policy.ts';
@@ -244,6 +244,7 @@ export async function route(request:Request,env:Env,ctx:ExecutionContext,trusted
  const replay=await replayReceipt(env,request);if(replay)return json(replay);
  const relation=/^\/api\/themes\/([^/]+)\/relationships(?:\/(save|remove))?$/.exec(path);if(relation&&method==='POST')return json(await (relation[2]==='save'?saveRelation:relation[2]==='remove'?removeOpposition:suggestRelations)(env,decodeURIComponent(relation[1]),await jsonBody(request.clone())));
  const drill=/^\/api\/themes\/([^/]+)\/drilldown(?:\/(save|candidates))?$/.exec(path);if(drill&&method==='POST')return json(await (drill[2]==='candidates'?addDrilldownCandidate:drill[2]?saveDrilldown:drilldown)(env,decodeURIComponent(drill[1]),await jsonBody(request.clone())));
+ if(drill&&!drill[2]&&method==='GET')return json(await readDrilldown(env,decodeURIComponent(drill[1])));
  if(path==='/api/book/integration-proposals'&&method==='GET')return json(await readProposals(env,url.searchParams.get('id')||undefined));
  if(path==='/api/book/integration-proposals'&&method==='POST')return json(await generateProposals(env,await jsonBody(request.clone())));
  if(path==='/api/book/integration-proposals/execute'&&method==='POST')return json(await executeProposals(env,await jsonBody(request.clone())));
