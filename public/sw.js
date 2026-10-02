@@ -1,4 +1,4 @@
-const CACHE='book-harvester-shell-v6',SHELL=['/','/index.html','/app.js','/offline.js','/style.css','/favicon.svg','/manifest.webmanifest','/icon-192.png','/icon-512.png'];
+const CACHE='book-harvester-shell-v7-connections',SHELL=['/','/index.html','/app.js','/offline.js','/style.css','/connections-entry.js','/connections-viewer.js','/connections-model.js','/connections.css','/favicon.svg','/manifest.webmanifest','/icon-192.png','/icon-512.png'];
 self.addEventListener('install',e=>e.waitUntil(caches.open(CACHE).then(c=>c.addAll(SHELL))));
 // Wait for old tabs to close before changing the shell version or IndexedDB contract.
 self.addEventListener('activate',e=>e.waitUntil((async()=>{for(const name of await caches.keys())if(name.startsWith('book-harvester-shell-')&&name!==CACHE)await caches.delete(name);await self.clients.claim();})()));
