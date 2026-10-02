@@ -32,7 +32,7 @@ function showNotice(text) {
 const aiRequest = (path,options={}) => {
   const method=(options.method||'GET').toUpperCase();
   if(method==='GET')return false;
-  return path==='/api/captures'||/\/assets$/.test(path)||/\/retry$/.test(path)||/\/ask$/.test(path)||path==='/api/book/discover'||path==='/api/book/integrate'||/^\/api\/themes\/[^/]+\/rebuild$/.test(path)||path==='/api/research'||path==='/api/theme-changes'||path==='/api/concept-edits';
+  return path==='/api/captures'||/\/assets$/.test(path)||/\/retry$/.test(path)||/\/ask$/.test(path)||path.startsWith('/api/book/integration-proposals')||path==='/api/book/discover'||path==='/api/book/integrate'||/^\/api\/themes\/[^/]+\/rebuild$/.test(path)||path==='/api/research'||path==='/api/theme-changes'||path==='/api/concept-edits';
 };
 function syncAiActivity(){
   const indicator=$('#ai-activity');if(!indicator)return;
@@ -126,6 +126,7 @@ function renderFeed() {
   }).join('')}${!captures.length ? `<div class="empty"><img class="empty-symbol" src="/favicon.svg" alt=""><h2>${query ? 'その言葉は、まだ見つかりません。' : '最初の一枚から、育っていきます。'}</h2><p>${query ? '別の言葉で探してみてください。' : '書名も、ページ番号も、タグも不要です。<br>写真を残したら、本の続きへ。'}</p></div>` : ''}
     ${state.views.length && !query && !state.filter_active ? `<p class="section-label">自分の見方</p>${state.views.map(v => `<button class="view-row" data-view="${v.id}"><span class="row-meta">自分の見方 · 第${v.version}版</span><h2>${esc(v.body)}</h2></button>`).join('')}` : ''}`;
   wireThemeLinks();
+  wireIntegrationProposals();
   bind('#device-pending','click',devicePendingDialog);
   document.querySelectorAll('[data-capture]').forEach(el => el.addEventListener('click', () => openCapture(el.dataset.capture).catch(e => showNotice(e.message))));
   document.querySelectorAll('[data-import]').forEach(el=>el.addEventListener('click',()=>openImport(el.dataset.import).catch(e=>showNotice(e.message))));
@@ -543,7 +544,7 @@ function themeHome(index){
  const count=(t,seen=new Set())=>{if(seen.has(t.id))return 0;seen.add(t.id);return Number(t.integration_count||0)+(children.get(t.id)||[]).reduce((n,c)=>n+count(c,seen),0);};
  const sort=list=>[...list].sort((a,b)=>count(b)-count(a)||Number(b.updated_at||0)-Number(a.updated_at||0)||a.id.localeCompare(b.id));
  const render=(t,seen=new Set())=>{if(seen.has(t.id))return '';const next=new Set(seen).add(t.id),branches=sort(children.get(t.id)||[]);return `<li><button class="capture-row theme-row" data-theme="${esc(t.id)}"><h2>${esc(t.question)}</h2></button>${branches.length?`<ul class="question-branches">${branches.map(c=>render(c,next)).join('')}</ul>`:''}</li>`;};
- return `<section class="theme-home" aria-label="問い"><ul class="question-roots">${sort(themes.filter(t=>t.is_tip!==0)).map(t=>render(t)).join('')}</ul></section>`;
+ return `<section class="theme-home" aria-label="問い"><button id="find-integration-proposals" class="quiet">統合案を探す</button><div id="integration-proposals"></div><ul class="question-roots">${sort(themes.filter(t=>t.is_tip!==0)).map(t=>render(t)).join('')}</ul></section>`;
 }
 function wireThemeLinks(){document.querySelectorAll('[data-theme]').forEach(el=>el.onclick=event=>{event.preventDefault();openTheme(el.dataset.theme).catch(e=>showNotice(e.message));});}
 async function openTheme(themeId,fromCapture=null){
@@ -605,4 +606,22 @@ function showRelated(run,c){
  const ids=()=>[...target.querySelectorAll('[data-related-select]:checked')].map(x=>x.dataset.relatedSelect);
  const update=()=>{sessionStorage.setItem(storageKey,JSON.stringify(ids()));$('#integrate-related').textContent=`${1+ids().length}件を統合する`;$('#integrate-related').disabled=c.kind==='theme'&&ids().length===0;};target.querySelectorAll('[data-related-select]').forEach(x=>x.addEventListener('change',update));update();target.querySelectorAll('[data-related-open]').forEach(x=>x.addEventListener('click',e=>{e.preventDefault();x.dataset.relatedOpen.startsWith('theme:')?openTheme(x.dataset.relatedOpen):openCapture(x.dataset.relatedOpen);}));
  bind('#integrate-related','click',async event=>{event.target.disabled=true;const selectedIds=ids();const mode=$('#integration-mode')?.value==='auto'?undefined:$('#integration-mode')?.value;const actionKey=`integration:${run.id}:${mode||''}:${selectedIds.slice().sort().join(',')}`;let key=sessionStorage.getItem(actionKey);if(!key){key=crypto.randomUUID();sessionStorage.setItem(actionKey,key);}try{const r=await api('/api/book/integrate',json('POST',{discovery_id:run.id,selected_ids:selectedIds,...mode?{mode}:{},idempotency_key:key}));if(r.state==='completed')await openTheme(r.theme_id);else showNotice('処理中、または中断しています。');}catch(e){showNotice(e.message);}finally{event.target.disabled=false;}});
+}
+
+let proposalGenerationKey=null;
+function wireIntegrationProposals(){
+ bind('#find-integration-proposals','click',async event=>{event.target.disabled=true;proposalGenerationKey ||= crypto.randomUUID();try{const run=await api('/api/book/integration-proposals',json('POST',{idempotency_key:proposalGenerationKey}));if(run.state!=='running')proposalGenerationKey=null;showIntegrationProposals(run);}catch(e){proposalGenerationKey=null;showNotice(e.message);}finally{event.target.disabled=false;}});
+ api('/api/book/integration-proposals').then(run=>{if($('#integration-proposals')&&run)showIntegrationProposals(run);}).catch(()=>{});
+}
+function showIntegrationProposals(run){
+ const target=$('#integration-proposals');if(!target)return;
+ if(run.state!=='completed'){target.textContent=run.state==='running'?'統合案を探しています…':(run.error||'統合案を取得できませんでした。');return;}
+ const storageKey=`proposal-selection:${run.id}`;let selected;try{selected=JSON.parse(sessionStorage.getItem(storageKey));}catch{};
+ const conflict=(a,b)=>Boolean(a.destination_id&&(a.destination_id===b.destination_id||b.materials.some(m=>m.id===a.destination_id))||b.destination_id&&a.materials.some(m=>m.id===b.destination_id));
+ if(!Array.isArray(selected)){selected=[];for(const p of run.proposals)if(p.state==='pending'&&!run.proposals.filter(x=>selected.includes(x.id)).some(x=>conflict(x,p)))selected.push(p.id);}
+ target.innerHTML=run.proposals.length?run.proposals.map(p=>`<div class="knowledge-item"><label><input type="checkbox" data-proposal-select="${esc(p.id)}" ${selected.includes(p.id)?'checked':''} ${['completed','running'].includes(p.state)?'disabled':''}> ${esc(p.question)}</label><p class="subtle">${p.materials.map(m=>esc(m.title)).join(' ＋ ')}</p><details class="fold"><summary>材料・理由</summary><p>${esc(p.reason)}</p>${p.materials.map(m=>`<p class="prose">${esc(m.text)}</p>`).join('')}</details>${p.state==='completed'?`<a href="#" data-theme="${esc(p.result.theme_id)}">統合済み</a>`:p.state==='failed'?`<p class="error">${esc(p.error)}</p>`:p.state==='running'?'<p>統合中…</p>':''}</div>`).join('')+'<button id="execute-proposals" class="primary"></button>':'<p class="subtle">有用な統合案は見つかりませんでした。</p>';
+ wireThemeLinks();const boxes=()=>[...target.querySelectorAll('[data-proposal-select]')];const ids=()=>boxes().filter(x=>x.checked&&!x.disabled).map(x=>x.dataset.proposalSelect);
+ const update=()=>{const chosen=run.proposals.filter(p=>ids().includes(p.id));for(const box of boxes()){const p=run.proposals.find(p=>p.id===box.dataset.proposalSelect);if(!['completed','running'].includes(p.state))box.disabled=!box.checked&&chosen.some(x=>conflict(x,p));}sessionStorage.setItem(storageKey,JSON.stringify(ids()));const b=$('#execute-proposals');if(b){b.textContent=`選んだ${ids().length}案を統合`;b.disabled=!ids().length;}};
+ boxes().forEach(x=>x.onchange=update);update();
+ bind('#execute-proposals','click',async event=>{event.target.disabled=true;boxes().forEach(x=>x.disabled=true);try{const saved=await api('/api/book/integration-proposals/execute',json('POST',{run_id:run.id,selected_ids:selected=run.proposals.filter(p=>target.querySelector(`[data-proposal-select="${p.id}"]`)?.checked&&!['completed','running'].includes(p.state)).map(p=>p.id),retry:true}));showIntegrationProposals(saved);}catch(e){showNotice(e.message);boxes().forEach(x=>{const p=run.proposals.find(p=>p.id===x.dataset.proposalSelect);x.disabled=['completed','running'].includes(p.state);});update();}});
 }
