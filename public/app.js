@@ -22,7 +22,7 @@ const errors = {
   incomplete_output:'解析結果が途中で止まりました。原資料は残っています。',
   provider_rejected:'解析の設定を確認する必要があります。原資料は残っています。',
 };
-const statusLabel = c => ({ completed:'', pending:'読み取り待ち', running:'読み取り中', failed:'読み取りできませんでした', blocked:['daily_limit','subscription_sharing_usage_limit_exceeded'].includes(c.error_code) ? '保存済み・上限の回復待ち' : c.error_code==='subscription_audio_unsupported'?'保存済み・音声文字起こしは対象外':c.error_code==='subscription_reauth_required'?'保存済み・ChatGPTの再接続待ち':'保存済み・AI設定待ち', superseded:'新しい版を読み取り中' })[c.state || c.job?.state] || '';
+const statusLabel = c => ({ completed:'', pending:'未解析', running:'読み取り中', failed:'読み取りできませんでした', blocked:['daily_limit','subscription_sharing_usage_limit_exceeded'].includes(c.error_code) ? '保存済み・上限の回復待ち' : c.error_code==='subscription_audio_unsupported'?'保存済み・音声文字起こしは対象外':c.error_code==='subscription_reauth_required'?'保存済み・ChatGPTの再接続待ち':'保存済み・AI設定待ち', superseded:'新しい版を読み取り中' })[c.state || c.job?.state] || '';
 const bind = (selector, event, fn) => $(selector)?.addEventListener(event, fn);
 
 function showNotice(text) {
@@ -288,7 +288,7 @@ function renderCapture() {
     <h1>${esc(h?.summary || '原資料を残しました。')}</h1>${label ? `<p class="status ${esc(c.job?.state)}">${esc(label)}</p>` : ''}
     ${c.pending_edit?'<p class="subtle">端末の訂正は未送信です。知見は保存先の前の版を表示しています。</p>':''}${c.from_cache?'<p class="subtle">端末に残した資料です。接続時に更新します。</p>':''}${c.local_only?`<p class="subtle">${c.local_conflict?'端末の原資料は残っています。保存状況から失敗内容を確認できます。':'端末の原資料を保存しました。接続後に自動送信します。AI抽出は実行しません。'}</p>${c.local_error?`<p class="error">${esc(c.local_error)}</p>`:''}`:''}
     ${['failed','blocked'].includes(c.job?.state) ? `<p class="subtle">${esc(errors[c.job.error_code] || '原資料は残っています。詳細から再試行できます。')}</p>` : ''}</div>
-    ${!h&&!c.local_only?'<section class="detail-section"><button id="analyze" class="primary">AIで抽出</button><p class="subtle">押したときだけ、この原資料をAIへ送って知見・問いを抽出します。</p></section>':''}
+    ${!h&&!c.local_only&&c.job?.state!=='running'?'<section class="detail-section"><button id="analyze" class="primary">AIで抽出</button><p class="subtle">押したときだけ、この原資料をAIへ送って知見・問いを抽出します。</p></section>':''}
     ${c.themes?.length?`<section class="detail-section"><p class="section-label">この記録が育てる問い</p>${c.themes.map(t=>`<a href="#" data-theme="${esc(t.id)}">${esc(t.question)}</a>`).join('<br>')}</section>`:''}
     ${h?'<section class="detail-section"><button id="find-related" class="primary">関連を探す</button><div id="related-candidates"></div></section>':''}
     ${h?'<details class="fold"><summary>周辺のつながりを読む・概念を整理する</summary><button id="open-neighborhood" class="quiet">この知見の周辺を開く</button></details>':''}
