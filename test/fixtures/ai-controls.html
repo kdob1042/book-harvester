@@ -1,0 +1,16 @@
+<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/ai-controls.css"><style>:root{--line:#ddd;--surface:white;--ink:#293630;--green:#284f42;--soft:#edf0e4;--danger:#914b3e}*{box-sizing:border-box}[hidden]{display:none!important}body{font-family:sans-serif;margin:24px}button{padding:12px}dialog{width:min(500px,calc(100% - 28px));padding:24px;border:1px solid #ddd;border-radius:20px;max-height:90dvh;overflow:auto}dialog::backdrop{background:#29363045;backdrop-filter:blur(3px)}.dialog-head{display:flex;justify-content:space-between;align-items:center}#input{max-width:100%}</style></head><body>
+<main id="app"><button id="open">深掘りを開く</button><button id="main-ai">統合</button></main><dialog id="dialog"></dialog>
+<script type="module">
+import {requestWithAIControls as request} from '/ai-controls.js';
+window.pending=[];window.applied=[];window.failures=[];
+window.send=(path,options)=>new Promise((resolve,reject)=>pending.push({path,options,resolve,reject}));
+window.launch=(path,options={method:'POST',body:'{}'},button=null)=>{
+ if(button)button.disabled=true;
+ const promise=request(path,options,window.send);
+ promise.then(data=>applied.push(data)).catch(error=>failures.push(error.message)).finally(()=>{if(button)button.disabled=false;});return promise;
+};
+window.openDialog=()=>{const dialog=document.querySelector('#dialog');dialog.innerHTML='<div class="dialog-head"><h2>深掘り</h2><button id="close">×</button></div><form id="form"><input id="input" value="調べる方向"><button id="go">AIで候補を出す</button></form>';if(!dialog.open)dialog.showModal();document.querySelector('#close').onclick=()=>dialog.close();document.querySelector('#form').onsubmit=event=>{event.preventDefault();void launch('/api/themes/example/drilldown',{method:'POST',body:JSON.stringify({direction:document.querySelector('#input').value})},event.submitter).catch(()=>{});};};
+document.querySelector('#open').onclick=openDialog;
+document.querySelector('#main-ai').onclick=event=>{void launch('/api/book/integrate',{method:'POST',body:'{}'},event.target).catch(()=>{});};
+await request('/api/state',{},async()=>({scope:'test'}));window.ready=true;
+</script></body></html>
