@@ -1,0 +1,16 @@
+import test from 'node:test';import assert from 'node:assert/strict';
+import {fixture,json,setProviderDouble} from './helpers.js';import {drilldown,validateDrilldown} from '../src/drilldown.ts';import {listThemes,readTheme} from '../src/themes.ts';
+const output={candidates:[{question:'職種によって効果は違うか？',content:'裁量の違いを確かめたい',reason:'条件を切り分ける'},{question:'追加業務が増えるのはなぜか？',content:'',reason:'仕組みを確認する'}]};
+const provider=async(url,options)=>{const body=JSON.parse(options.body),input=JSON.parse(body.input);assert.equal(body.text.format.name,'question_drilldown_v1');assert.equal(input.theme.content,'時間の使い方に注目');assert.equal(input.direction,'条件');return Response.json({output:[{content:[{type:'output_text',text:JSON.stringify(output)}]}]});};
+test('explicit drilldown creates ordinary child questions without rewriting or automatic AI',async t=>{
+ const f=await fixture();t.after(f.close);await f.login();f.env.AI_EXECUTION_POLICY='explicit';f.db.prepare("UPDATE themes SET content='時間の使い方に注目' WHERE id='theme:work'").run();const before=f.db.prepare("SELECT * FROM themes WHERE id='theme:work'").get();
+ setProviderDouble(provider);t.after(()=>setProviderDouble(null));
+ const r=await f.request('/api/themes/theme%3Awork/drilldown',json('POST',{version:1,direction:'条件'}));assert.equal(r.status,200);const run=await r.json();assert.equal(run.candidates.length,2);assert.equal(f.db.prepare('SELECT count(*) n FROM themes').get().n,6);
+ const save=()=>f.request('/api/themes/theme%3Awork/drilldown/save',json('POST',{run_id:run.id,candidate_index:0}));const saved=await (await save()).json();assert.equal((await (await save()).json()).id,saved.id);assert.equal(f.db.prepare('SELECT count(*) n FROM question_relations').get().n,1);assert.equal(f.db.prepare('SELECT count(*) n FROM ai_calls').get().n,1);
+ assert.deepEqual(f.db.prepare("SELECT * FROM themes WHERE id='theme:work'").get(),before);assert.equal(f.db.prepare('SELECT count(*) n FROM integration_runs').get().n,0);assert.equal(f.db.prepare('SELECT count(*) n FROM theme_jobs').get().n,0);
+ const detail=await readTheme(f.env,saved.id);assert.equal(detail.drilldown_parents[0].id,'theme:work');assert.equal(detail.theme.state,'active');assert.equal(detail.theme.content,output.candidates[0].content);
+ const index=await listThemes(f.env);assert.equal(index.themes.find(x=>x.id===saved.id).is_tip,0);assert.ok(index.branches.some(x=>x.child_id===saved.id));
+ await drilldown(f.env,saved.id,{version:1},async()=>Response.json({output:[{content:[{type:'output_text',text:JSON.stringify(output)}]}]}));assert.equal(f.db.prepare('SELECT count(*) n FROM ai_calls').get().n,2);
+ f.db.prepare("UPDATE themes SET version=2 WHERE id='theme:work'").run();assert.equal((await f.request('/api/themes/theme%3Awork/drilldown/save',json('POST',{run_id:run.id,candidate_index:1}))).status,409);
+});
+test('reject malformed candidates and stale parent before AI',async t=>{assert.throws(()=>validateDrilldown({candidates:[]}));assert.throws(()=>validateDrilldown({candidates:[{},{}]}));const f=await fixture();t.after(f.close);await assert.rejects(drilldown(f.env,'theme:work',{version:9}));assert.equal(f.db.prepare('SELECT count(*) n FROM ai_calls').get().n,0);});
