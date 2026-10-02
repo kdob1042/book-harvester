@@ -1,3 +1,4 @@
+import {aiConfigured} from './chatgpt.ts';
 import {scheduleEmbedding,dispatchEmbeddings,processEmbedding} from './semantic.ts';
 import {dispatchResearch,processResearch} from './research.ts';
 import {stmt,rows,getCapture,now,id,type Job,type QueueBody} from './core.ts';
@@ -11,7 +12,7 @@ export async function dispatch(env:Env) {
  const time=now();
  await env.DB.batch([
   stmt(env,`UPDATE jobs SET state=CASE WHEN attempts>=3 THEN 'failed' ELSE 'pending' END,error_code='worker_interrupted',dispatched_at=NULL,lease_token=NULL WHERE state='running' AND lease_until<?`,time),
-  stmt(env,`UPDATE jobs SET state='pending',error_code=NULL,dispatched_at=NULL,available_at=? WHERE state='blocked' AND (?=1 AND (error_code='ai_not_configured' OR (error_code='daily_limit' AND available_at<=?)))`,time,env.OPENAI_API_KEY?1:0,time),
+  stmt(env,`UPDATE jobs SET state='pending',error_code=NULL,dispatched_at=NULL,available_at=? WHERE state='blocked' AND (?=1 AND (error_code='ai_not_configured' OR (error_code IN ('daily_limit','subscription_sharing_usage_limit_exceeded') AND available_at<=?)))`,time,aiConfigured(env)?1:0,time),
  ]);
  const jobs=await rows<Job>(env,`SELECT * FROM jobs WHERE state='pending' AND available_at<=? AND (dispatched_at IS NULL OR dispatched_at<?) ORDER BY created_at LIMIT 50`,time,time-300000);
  for(const job of jobs){
@@ -69,11 +70,11 @@ export async function processJob(env:Env,jobId:string,fetcher?:typeof fetch) {
   await dispatchEmbeddings(env);
   await dispatchGraph(env);
  }catch(e){
-  const safe=e instanceof AiError?e:new AiError('processing_failed'),blocked=['ai_not_configured','daily_limit'].includes(safe.code);
+  const safe=e instanceof AiError?e:new AiError('processing_failed'),blocked=['ai_not_configured','daily_limit','subscription_reauth_required','subscription_sharing_usage_limit_exceeded','subscription_audio_unsupported'].includes(safe.code);
   const next=blocked?'blocked':safe.retryable&&job.attempts<3?'pending':'failed';
   const tomorrow=new Date();tomorrow.setUTCHours(24,0,0,0);
   await stmt(env,`UPDATE jobs SET state=?,error_code=?,available_at=?,dispatched_at=NULL,lease_token=NULL WHERE id=? AND state='running' AND lease_token=?`,
-   next,safe.code,safe.code==='daily_limit'?tomorrow.getTime():now()+1000*2**job.attempts,job.id,token).run();
+   next,safe.code,['daily_limit','subscription_sharing_usage_limit_exceeded'].includes(safe.code)?tomorrow.getTime():now()+1000*2**job.attempts,job.id,token).run();
  }
 }
 

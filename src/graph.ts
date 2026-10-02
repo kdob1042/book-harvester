@@ -1,3 +1,4 @@
+import {aiConfigured} from './chatgpt.ts';
 import {semanticCandidates} from './semantic.ts';
 import {stmt,rows,getCapture,now,id,digest,type Harvest,type View} from './core.ts';
 import {call,AiError} from './ai.ts';
@@ -32,7 +33,7 @@ export async function dispatchGraph(env:Env){
  const time=now();
  await env.DB.batch([
   stmt(env,`UPDATE graph_jobs SET state=CASE WHEN attempts>=3 THEN 'failed' ELSE 'pending' END,error_code='worker_interrupted',dispatched_at=NULL,lease_token=NULL WHERE state='running' AND lease_until<?`,time),
-  stmt(env,`UPDATE graph_jobs SET state='pending',error_code=NULL,dispatched_at=NULL,available_at=? WHERE state='blocked' AND ?=1 AND (error_code='ai_not_configured' OR (error_code='daily_limit' AND available_at<=?))`,time,env.OPENAI_API_KEY?1:0,time),
+  stmt(env,`UPDATE graph_jobs SET state='pending',error_code=NULL,dispatched_at=NULL,available_at=? WHERE state='blocked' AND ?=1 AND (error_code='ai_not_configured' OR (error_code IN ('daily_limit','subscription_sharing_usage_limit_exceeded') AND available_at<=?))`,time,aiConfigured(env)?1:0,time),
   stmt(env,`UPDATE graph_jobs SET state='pending',attempts=0,error_code=NULL,dispatched_at=NULL,available_at=? WHERE id IN(
    SELECT j.id FROM graph_jobs j JOIN captures c ON c.id=j.capture_id AND c.version=j.version
    JOIN graph_generations g ON g.capture_id=j.capture_id AND g.version=j.version AND g.active=1
@@ -123,8 +124,8 @@ export async function processGraphJob(env:Env,jobId:string,fetcher?:typeof fetch
   if(!saved[finalIndex].meta.changes){
    await stmt(env,`UPDATE graph_jobs SET state=CASE WHEN version<>(SELECT version FROM captures WHERE id=capture_id) THEN 'superseded' WHEN attempts<3 THEN 'pending' ELSE 'failed' END,error_code='graph_context_changed',dispatched_at=NULL,lease_token=NULL,available_at=? WHERE id=? AND lease_token=?`,now(),jobId,token).run();
   }
- }catch(e){const safe=e instanceof AiError?e:new AiError('graph_processing_failed');const blocked=['ai_not_configured','daily_limit'].includes(safe.code);const tomorrow=new Date();tomorrow.setUTCHours(24,0,0,0);
-  await stmt(env,`UPDATE graph_jobs SET state=?,error_code=?,available_at=?,dispatched_at=NULL,lease_token=NULL WHERE id=? AND lease_token=?`,blocked?'blocked':safe.retryable&&job.attempts<3?'pending':'failed',safe.code,safe.code==='daily_limit'?tomorrow.getTime():now()+1000*2**job.attempts,jobId,token).run();
+ }catch(e){const safe=e instanceof AiError?e:new AiError('graph_processing_failed');const blocked=['ai_not_configured','daily_limit','subscription_reauth_required','subscription_sharing_usage_limit_exceeded','subscription_audio_unsupported'].includes(safe.code);const tomorrow=new Date();tomorrow.setUTCHours(24,0,0,0);
+  await stmt(env,`UPDATE graph_jobs SET state=?,error_code=?,available_at=?,dispatched_at=NULL,lease_token=NULL WHERE id=? AND lease_token=?`,blocked?'blocked':safe.retryable&&job.attempts<3?'pending':'failed',safe.code,['daily_limit','subscription_sharing_usage_limit_exceeded'].includes(safe.code)?tomorrow.getTime():now()+1000*2**job.attempts,jobId,token).run();
  }
 }
 

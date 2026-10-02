@@ -1,3 +1,4 @@
+import {aiConfigured} from './chatgpt.ts';
 import {stmt,rows,getCapture,now,id,digest,type Harvest} from './core.ts';
 import {call,AiError} from './ai.ts';
 import {reflectionSchema,reflectionInstructions,validateReflection} from './reflection-contract.js';
@@ -54,7 +55,7 @@ export async function dispatchReflections(env:Env){
  const time=now();
  await env.DB.batch([
   stmt(env,`UPDATE reflection_jobs SET state=CASE WHEN attempts>=3 THEN 'failed' ELSE 'pending' END,dispatched_at=NULL,lease_token=NULL,error_code='worker_interrupted' WHERE state='running' AND lease_until<?`,time),
-  stmt(env,`UPDATE reflection_jobs SET state='pending',dispatched_at=NULL,error_code=NULL,available_at=? WHERE state='blocked' AND ?=1 AND (error_code='ai_not_configured' OR (error_code='daily_limit' AND available_at<=?))`,time,env.OPENAI_API_KEY?1:0,time),
+  stmt(env,`UPDATE reflection_jobs SET state='pending',dispatched_at=NULL,error_code=NULL,available_at=? WHERE state='blocked' AND ?=1 AND (error_code='ai_not_configured' OR (error_code IN ('daily_limit','subscription_sharing_usage_limit_exceeded') AND available_at<=?))`,time,aiConfigured(env)?1:0,time),
  ]);
  const jobs=await rows<Job>(env,`SELECT * FROM reflection_jobs WHERE state='pending' AND available_at<=? AND (dispatched_at IS NULL OR dispatched_at<?) ORDER BY available_at LIMIT 10`,time,time-300000);
  for(const j of jobs){const claim=await stmt(env,`UPDATE reflection_jobs SET dispatched_at=? WHERE id=? AND state='pending' AND signature=? AND (dispatched_at IS NULL OR dispatched_at<?) RETURNING id`,time,j.id,j.signature,time-300000).first();if(!claim)continue;
@@ -78,8 +79,8 @@ export async function processReflection(env:Env,jobId:string,fetcher?:typeof fet
    stmt(env,`INSERT INTO reflections(id,scope,scope_key,signature,result,input_json,model,processing_version,created_at) SELECT ?,?,?,?,?,?,?,?,? WHERE ${guard}`,id(),job.scope,job.scope_key,job.signature,JSON.stringify(output),job.input_json,env.OPENAI_MODEL,'reflection-v1',now(),...args),
    stmt(env,`UPDATE reflection_jobs SET state='completed',error_code=NULL,lease_token=NULL WHERE id=? AND signature=? AND lease_token=? AND ${guard}`,job.id,job.signature,token,...args),
   ]);
- }catch(e){const safe=e instanceof AiError?e:new AiError('reflection_failed');const blocked=['ai_not_configured','daily_limit'].includes(safe.code),tomorrow=new Date();tomorrow.setUTCHours(24,0,0,0);
-  await stmt(env,`UPDATE reflection_jobs SET state=?,error_code=?,dispatched_at=NULL,lease_token=NULL,available_at=? WHERE id=? AND signature=? AND lease_token=?`,blocked?'blocked':safe.retryable&&job.attempts<3?'pending':'failed',safe.code,safe.code==='daily_limit'?tomorrow.getTime():now()+1000*2**job.attempts,job.id,job.signature,token).run();
+ }catch(e){const safe=e instanceof AiError?e:new AiError('reflection_failed');const blocked=['ai_not_configured','daily_limit','subscription_reauth_required','subscription_sharing_usage_limit_exceeded','subscription_audio_unsupported'].includes(safe.code),tomorrow=new Date();tomorrow.setUTCHours(24,0,0,0);
+  await stmt(env,`UPDATE reflection_jobs SET state=?,error_code=?,dispatched_at=NULL,lease_token=NULL,available_at=? WHERE id=? AND signature=? AND lease_token=?`,blocked?'blocked':safe.retryable&&job.attempts<3?'pending':'failed',safe.code,['daily_limit','subscription_sharing_usage_limit_exceeded'].includes(safe.code)?tomorrow.getTime():now()+1000*2**job.attempts,job.id,job.signature,token).run();
  }
 }
 export async function listReflections(env:Env){
