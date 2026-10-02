@@ -72,6 +72,11 @@ try {
     await node('theme:middle').click(); await page.locator('.cv-detail-head h3').filter({hasText:'判断する仕事'}).waitFor();
     await page.waitForFunction(()=>document.querySelectorAll('.cv-edge').length===5);
     assert.equal(await page.locator('.cv-node-capture').count(),1); checks++;
+    const previousBox = await page.locator('.cv-graph').getAttribute('viewBox');
+    await node(`capture:${cap}`).click();
+    await page.getByRole('button',{name:'前の項目に戻る',exact:true}).click();
+    await page.locator('.cv-detail-head h3').filter({hasText:'判断する仕事'}).waitFor();
+    assert.equal(await page.locator('.cv-graph').getAttribute('viewBox'),previousBox); checks++;
     await node(`capture:${cap}`).click(); await page.getByText('原文',{exact:true}).click();
     await page.getByText(capture.original_text,{exact:true}).waitFor(); checks++;
     // Search/zoom/pan are entirely local, including optional question content.

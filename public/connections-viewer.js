@@ -64,6 +64,16 @@ export function openConnections(opener = document.activeElement) {
   let index = { themes: [], branches: [] }, graph, shown, layout, selection = null, requestNumber = 0, isClosed = false;
   const details = new Map(), captures = new Map(), requests = new Map();
   let box = { x: 0, y: 0, w: 1000, h: 600 }, wasFit = true, searchTimer;
+  const history = [];
+  const back = button('戻る', '前の項目に戻る', async () => {
+    const previous = history.pop(); if (!previous) return;
+    search.value = previous.search;
+    await select(previous.id, false);
+    if (isClosed || selection !== previous.id) return;
+    setBox(previous.box); wasFit = previous.wasFit;
+    back.disabled = history.length === 0;
+  });
+  back.disabled = true;
   function setBox(next) {
     if (![next.x, next.y, next.w, next.h].every(Number.isFinite) || next.w <= 0 || next.h <= 0) return;
     box = next; svg.setAttribute('viewBox', `${box.x} ${box.y} ${box.w} ${box.h}`);
@@ -87,7 +97,7 @@ export function openConnections(opener = document.activeElement) {
     const rect = svg.getBoundingClientRect();
     setBox({ ...box, x: box.x - dx * box.w / Math.max(1, rect.width), y: box.y - dy * box.h / Math.max(1, rect.height) }); wasFit = false;
   }
-  controls.append(button('+', '拡大', () => zoom(1.3)), button('−', '縮小', () => zoom(1 / 1.3)), button('全体', '全体を表示', fit));
+  controls.append(back, button('+', '拡大', () => zoom(1.3)), button('−', '縮小', () => zoom(1 / 1.3)), button('全体', '全体を表示', fit));
 
   function draw(reset = false) {
     const previous = selection && layout?.positions.get(selection);
@@ -113,7 +123,7 @@ export function openConnections(opener = document.activeElement) {
         class: `cv-node cv-node-${node.kind}${node.count ? ' cv-node-integrated' : ''}${selected ? ' cv-node-selected' : ''}` });
       group.append(svgElement('title', {}, node.title), svgElement('rect', { width: CARD.width, height: CARD.height, rx: node.kind === 'capture' ? 6 : 15 }));
       group.append(svgElement('text', { x: 14, y: 21, class: 'cv-node-kind' },
-        node.kind === 'capture' ? '記録' : node.count ? `統合 ${node.count}` : '問い'));
+        node.kind === 'capture' ? '記録' : '問い'));
       labelLines(node.title).forEach((text, i) => group.append(svgElement('text', { x: 14, y: 44 + i * 20, class: 'cv-node-title' }, text)));
       if (node.stale) group.append(svgElement('text', { x: CARD.width - 22, y: 21, class: 'cv-node-stale' }, '!'));
       group.addEventListener('click', event => { if (!suppressClick || event.detail === 0) select(node.id); });
@@ -217,8 +227,13 @@ export function openConnections(opener = document.activeElement) {
     }
     return requests.get(path);
   }
-  async function select(id) {
+  async function select(id, remember = true) {
     const node = graph.nodes.find(n => n.id === id); if (!node) return;
+    if (remember && selection && selection !== id) {
+      history.push({ id: selection, box: { ...box }, wasFit, search: search.value });
+      if (history.length > 100) history.shift();
+      back.disabled = false;
+    }
     const serial = ++requestNumber; selection = id; draw(); panelHeading(node);
     panel.append(element('p', 'cv-meta', '読み込み中…'));
     try {
@@ -243,7 +258,7 @@ export function openConnections(opener = document.activeElement) {
   }
   async function load() {
     const serial = ++requestNumber;
-    selection = null; details.clear(); captures.clear(); requests.clear();
+    selection = null; history.length = 0; back.disabled = true; details.clear(); captures.clear(); requests.clear();
     index = { themes: [], branches: [] }; svg.replaceChildren(); layout = null; search.disabled = true;
     panel.hidden = true; message.replaceChildren(); status.textContent = '読み込み中…';
     try {
