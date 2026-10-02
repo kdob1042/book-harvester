@@ -4,7 +4,7 @@ import {callBook} from './book-operations.ts';
 import {readDiscovery,latestDiscovery,integrateRecords} from './discovery.ts';
 import {automaticAI} from './ai-policy.ts';
 import {themeContext,saveAnalysis,rebuildTheme,discover} from './book-actions.ts';
-import {listThemes,readTheme,captureThemes,actThemeProposal,themeMigrationStatus,manageThemeMigration,editTheme,overrideTheme,mergeTheme} from './themes.ts';
+import {listThemes,readTheme,captureThemes,actThemeProposal,themeMigrationStatus,manageThemeMigration,editTheme,deleteTheme,overrideTheme,mergeTheme} from './themes.ts';
 import {aiConfigured,chatgptStatus,disconnectChatgpt} from './chatgpt.ts';
 import {ownerScope,syncDelta,receiptStatement,replayReceipt} from './sync.ts';
 import {semanticSearch} from './semantic.ts';
@@ -251,7 +251,7 @@ export async function route(request:Request,env:Env,ctx:ExecutionContext,trusted
  if(path==='/api/themes/migration'&&method==='POST'){const r=await manageThemeMigration(env,await jsonBody(request.clone()));ctx.waitUntil(dispatch(env));return json(r);}
  if(path==='/api/themes'&&method==='GET')return json(await listThemes(env));
  const themeMatch=/^\/api\/themes\/([^/]+)(?:\/(proposals|history|overrides|merge))?$/.exec(path);
- if(themeMatch){const themeId=decodeURIComponent(themeMatch[1]);if(!themeMatch[2]&&method==='PATCH')return json(await editTheme(env,themeId,await jsonBody(request.clone())));if(themeMatch[2]==='merge'&&method==='POST')return json(await mergeTheme(env,themeId,await jsonBody(request.clone())));if(themeMatch[2]==='overrides'&&method==='POST')return json(await overrideTheme(env,themeId,await jsonBody(request.clone())));if(!themeMatch[2]&&method==='GET')return json(await readTheme(env,themeId));if(themeMatch[2]==='history'&&method==='GET'){const detail=await readTheme(env,themeId);return json(await rows(env,'SELECT * FROM theme_revisions WHERE theme_id=? ORDER BY version DESC LIMIT 20',themeId));}if(themeMatch[2]==='proposals'&&method==='POST')return json(await actThemeProposal(env,themeId,await jsonBody(request.clone())));}
+ if(themeMatch){const themeId=decodeURIComponent(themeMatch[1]);if(!themeMatch[2]&&method==='PATCH')return json(await editTheme(env,themeId,await jsonBody(request.clone())));if(!themeMatch[2]&&method==='DELETE')return json(await deleteTheme(env,themeId,await jsonBody(request.clone())));if(themeMatch[2]==='merge'&&method==='POST')return json(await mergeTheme(env,themeId,await jsonBody(request.clone())));if(themeMatch[2]==='overrides'&&method==='POST')return json(await overrideTheme(env,themeId,await jsonBody(request.clone())));if(!themeMatch[2]&&method==='GET')return json(await readTheme(env,themeId));if(themeMatch[2]==='history'&&method==='GET'){const detail=await readTheme(env,themeId);return json(await rows(env,'SELECT * FROM theme_revisions WHERE theme_id=? ORDER BY version DESC LIMIT 20',themeId));}if(themeMatch[2]==='proposals'&&method==='POST')return json(await actThemeProposal(env,themeId,await jsonBody(request.clone())));}
  if(path==='/api/sync'&&method==='GET')return json(await syncDelta(env,url.searchParams.get('cursor')));
  if(path==='/api/logout'&&method==='POST')return json({ok:true,...(env.ACCESS_AUD?{redirect:'/cdn-cgi/access/logout'}:{})},200,{'Set-Cookie':await logout(request,env)});
  if(path==='/api/ai-activity'&&method==='GET'){
