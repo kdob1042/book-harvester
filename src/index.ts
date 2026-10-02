@@ -3,7 +3,7 @@ import {suggestRelations,saveRelation,removeOpposition} from './question-relatio
 import {drilldown,saveDrilldown,addDrilldownCandidate} from './drilldown.ts';
 import {callBook} from './book-operations.ts';
 import {readDiscovery,latestDiscovery,integrateRecords} from './discovery.ts';
-import {automaticAI} from './ai-policy.ts';
+import {automaticAI,authorizeAI} from './ai-policy.ts';
 import {themeContext,saveAnalysis,rebuildTheme,discover} from './book-actions.ts';
 import {listThemes,readTheme,captureThemes,actThemeProposal,themeMigrationStatus,manageThemeMigration,editTheme,deleteTheme,overrideTheme,mergeTheme} from './themes.ts';
 import {aiConfigured,chatgptStatus,disconnectChatgpt} from './chatgpt.ts';
@@ -17,6 +17,8 @@ import {HttpError,fail,text,version,jsonBody,stmt,rows,getCapture,jobStatement,r
 import {loggedIn,login,logout,accessAuthorized} from './auth.ts';
 import {captureInput,requestKey,stageAsset,type Input} from './input.ts';
 import {dispatch,cleanup,consume} from './queue.ts';
+import {startImportExtraction} from './imports.ts';
+import {startExtraction} from './extraction.ts';
 import {storeCapture} from './capture-storage.ts';
 import {answer,AiError} from './ai.ts';
 import {readGraph,rebuildGraph} from './graph.ts';
@@ -35,8 +37,9 @@ function headers(response:Response,env:Env){
 }
 async function list(env:Env,search:string,semanticIds:string[]=[],filters={source:'',year:'',origin:''}){
  const escaped=`%${search.replace(/[\\%_]/g,'\\$&')}%`;
- const data=await rows<Capture&{result:string|null;state:string;error_code:string|null;original_preview:string}>(env,`SELECT c.id,c.kind,c.version,c.created_at,c.page,c.locator_certainty,c.source_inherited,
- s.title AS source_title,s.certainty AS source_certainty,j.state,j.error_code,h.result,substr(c.original_text,1,100) AS original_preview
+ const data=await rows<Capture&{result:string|null;state:string;error_code:string|null;original_preview:string;ai_authorized:number}>(env,`SELECT c.id,c.kind,c.version,c.created_at,c.page,c.locator_certainty,c.source_inherited,
+ s.title AS source_title,s.certainty AS source_certainty,j.state,j.error_code,h.result,substr(c.original_text,1,100) AS original_preview,
+ EXISTS(SELECT 1 FROM explicit_ai_actions a WHERE a.kind='harvest' AND a.target_id=c.id AND a.version=c.version) AS ai_authorized
  FROM captures c LEFT JOIN sources s ON s.id=c.source_id LEFT JOIN jobs j ON j.capture_id=c.id AND j.version=c.version
  LEFT JOIN harvests h ON h.capture_id=c.id AND h.version=c.version
  WHERE NOT EXISTS(SELECT 1 FROM capture_visibility v WHERE v.capture_id=c.id AND v.hidden=1) AND (c.id IN(SELECT value FROM json_each(?)) OR ?='' OR c.original_text LIKE ? ESCAPE '\\' OR c.note LIKE ? ESCAPE '\\' OR h.result LIKE ? ESCAPE '\\' OR s.title LIKE ? ESCAPE '\\'
@@ -276,10 +279,10 @@ export async function route(request:Request,env:Env,ctx:ExecutionContext,trusted
  if(path==='/api/captures'&&method==='POST'){
   const saved=await saveCapture(request,env);ctx.waitUntil(dispatch(env));return saved;
  }
- const match=/^\/api\/captures\/([a-f0-9-]{36})(?:\/(assets|retry|adopt|ask|proposal|hide))?$/.exec(path);
+ const match=/^\/api\/captures\/([a-f0-9-]{36})(?:\/(assets|extract|cancel-extraction|retry|adopt|ask|proposal|hide))?$/.exec(path);
  if(match){
   const [,captureId,action]=match;
-  if(!action&&method==='GET'){const c=await getCapture(env,captureId);if(!c)fail(404,'記録が見つかりません。');return json({...c,membership_job:await stmt(env,"SELECT id,version,state,error_code FROM theme_jobs WHERE kind='membership' AND target_id=? AND version=?",c.id,c.version).first(),themes:await captureThemes(env,c.id),graph:await readGraph(env,c.id,c.version),import_ref:await stmt(env,'SELECT i.job_id,i.ordinal,i.locator,j.name FROM import_items i JOIN import_jobs j ON j.id=i.job_id WHERE i.capture_id=?',c.id).first(),bibliography:c.source_bibliography?JSON.parse(c.source_bibliography):null});}
+  if(!action&&method==='GET'){const c=await getCapture(env,captureId);if(!c)fail(404,'記録が見つかりません。');const aiAuthorized=Boolean(await stmt(env,"SELECT 1 FROM explicit_ai_actions WHERE kind='extract' AND target_id=? AND version=?",c.id,c.version).first());return json({...c,ai_authorized:aiAuthorized,membership_job:await stmt(env,"SELECT id,version,state,error_code FROM theme_jobs WHERE kind='membership' AND target_id=? AND version=?",c.id,c.version).first(),themes:await captureThemes(env,c.id),graph:await readGraph(env,c.id,c.version),import_ref:await stmt(env,'SELECT i.job_id,i.ordinal,i.locator,j.name FROM import_items i JOIN import_jobs j ON j.id=i.job_id WHERE i.capture_id=?',c.id).first(),bibliography:c.source_bibliography?JSON.parse(c.source_bibliography):null});}
   if(!action&&method==='PATCH'){const saved=await editCapture(request,env,captureId);ctx.waitUntil(dispatch(env));return saved;}
   if(!action&&method==='DELETE')return deleteCapture(request,env,captureId);
   if(action==='assets'&&method==='POST'){const saved=await supplement(request,env,captureId);ctx.waitUntil(dispatch(env));return saved;}
@@ -305,12 +308,8 @@ export async function route(request:Request,env:Env,ctx:ExecutionContext,trusted
    if(!saved.meta.changes)fail(409,'回答中に資料が更新されました。開き直してください。');
    return json({...result,capture_id:c.id,capture_version:c.version});
   }
-  if(action==='retry'&&method==='POST'){
-   const input=await jsonBody(request.clone());
-   const change=await stmt(env,`UPDATE jobs SET state='pending',attempts=0,error_code=NULL,available_at=?,dispatched_at=NULL
-    WHERE capture_id=? AND version=? AND version=(SELECT version FROM captures WHERE id=?) AND state IN('blocked','failed')`,now(),captureId,version(input.version),captureId).run();
-   if(!change.meta.changes)fail(409,'記録が更新されたか、処理中です。');ctx.waitUntil(dispatch(env));return json({ok:true});
-  }
+  if(action==='cancel-extraction'&&method==='POST'){const input=await jsonBody(request.clone()),v=version(input.version);await env.DB.batch([stmt(env,"DELETE FROM explicit_ai_actions WHERE kind='extract' AND target_id=? AND version=?",captureId,v),stmt(env,"UPDATE jobs SET state='blocked',error_code='extraction_required',lease_token=NULL,dispatched_at=NULL WHERE capture_id=? AND version=? AND state IN('pending','running','blocked')",captureId,v)]);return json({ok:true});}
+  if((action==='extract'||action==='retry')&&method==='POST'){const input=await jsonBody(request.clone());return json(await startExtraction(env,ctx,captureId,version(input.version)),202);}
  }
  const assetMatch=/^\/api\/assets\/([a-f0-9-]{36})$/.exec(path);
  if(assetMatch&&method==='GET'){
@@ -355,10 +354,11 @@ export async function route(request:Request,env:Env,ctx:ExecutionContext,trusted
  if(researchMatch){const r=await readResearch(env,researchMatch[1]);if(!r)fail(404,'調査がありません。');if(!researchMatch[2]&&method==='GET')return json(r);if(method==='POST'&&researchMatch[2]==='cancel'){await cancelResearch(env,r.id);return json({ok:true});}if(method==='POST'&&researchMatch[2]==='retry'){await retryResearch(env,r.id);ctx.waitUntil(dispatch(env));return json({ok:true});}}
  if(path==='/api/export'&&method==='GET')return exportData(env);
  if(path==='/api/imports'&&method==='POST'){const saved=await receiveImport(request,env);ctx.waitUntil(dispatch(env));return json(saved,saved.duplicate?200:201);}
- const importMatch=/^\/api\/imports\/([a-f0-9-]{36})(?:\/(select|retry|original|order)(?:\/(\d+))?)?$/.exec(path);
+ const importMatch=/^\/api\/imports\/([a-f0-9-]{36})(?:\/(extract|select|retry|original|order)(?:\/(\d+))?)?$/.exec(path);
  if(importMatch){
   const job=await readImport(env,importMatch[1]);if(!job)fail(404,'取り込みがありません。');const action=importMatch[2];
   if(!action&&method==='GET')return json(job);
+  if(action==='extract'&&method==='POST'){const result=await startImportExtraction(env,job.id);ctx.waitUntil(dispatch(env));return json(result,202);}
   if(action==='original'&&method==='GET'){const original=await importOriginal(env,job.id,importMatch[3]?Number(importMatch[3]):null);if(!original)fail(404,'原ファイルがありません。');return original;}
   if(action==='select'&&method==='POST'){const input=await jsonBody(request.clone());if(!Array.isArray(input.ordinals)||input.ordinals.some(n=>!Number.isInteger(n)))fail(400,'取り込む範囲を選んでください。');await selectImport(env,job.id,input.ordinals as number[]);ctx.waitUntil(dispatch(env));return json({ok:true},202);}
   if(action==='order'&&method==='POST'){const input=await jsonBody(request.clone());if(job.format!=='photos'||!Array.isArray(input.ordinals))fail(400,'写真番号を指定してください。');await reorderImport(env,job.id,input.ordinals as number[]);return json({ok:true});}

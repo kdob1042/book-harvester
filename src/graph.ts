@@ -99,7 +99,7 @@ export async function processGraphJob(env:Env,jobId:string,fetcher?:typeof fetch
   if(result.view_proposal){guard+=' AND EXISTS(SELECT 1 FROM views WHERE id=? AND version=?)';guardValues.push(result.view_proposal.view_id,result.view_proposal.base_version);}
   const statements:D1PreparedStatement[]=[
    stmt(env,`UPDATE graph_generations SET active=0 WHERE capture_id=? AND version=? AND ${guard}`,c.id,c.version,...guardValues),
-   stmt(env,`INSERT INTO graph_generations(id,capture_id,version,active,result,model,processing_version,input_snapshot,created_at) SELECT ?,?,?,1,?,?,?,?,? WHERE ${guard}`,generation,c.id,c.version,JSON.stringify(result),env.OPENAI_MODEL,'graph-v1',serialized,now(),...guardValues),
+   stmt(env,`INSERT INTO graph_generations(id,capture_id,version,active,result,model,processing_version,input_snapshot,created_at) SELECT ?,?,?,1,?,?,?,?,? WHERE ${guard}`,generation,c.id,c.version,JSON.stringify(result),data.used_model||env.OPENAI_MODEL,'graph-v1',serialized,now(),...guardValues),
   ];
   const exists='EXISTS(SELECT 1 FROM graph_generations WHERE id=?)';
   for(const group of [{kind:'claim',items:h.claims},{kind:'concept',items:h.concepts},{kind:'question',items:h.questions}]){

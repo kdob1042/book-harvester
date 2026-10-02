@@ -26,10 +26,10 @@ class Statement {
  async run(){return this.exec();}
 }
 
-export async function fixture({key='test-fixture-key',limit='60'}={}){
+export async function fixture({key='test-fixture-key',limit='60',policy='automatic_legacy'}={}){
  const db=new DatabaseSync(':memory:');for(const file of (await readdir(new URL('../migrations/',import.meta.url))).filter(x=>x.endsWith('.sql')).sort())db.exec(await readFile(new URL(`../migrations/${file}`,import.meta.url),'utf8'));
  const objects=new Map(),messages=[],pending=[];
- const env={APP_PASSWORD:'test-only-long-password',APP_ORIGIN:'http://localhost:8787',OPENAI_API_KEY:key,OPENAI_MODEL:'gpt-4.1-mini',OPENAI_TRANSCRIBE_MODEL:'gpt-4o-mini-transcribe',OPENAI_RESEARCH_MODEL:'gpt-4.1-mini',RESEARCH_ALLOWED_HOSTS:'',AI_DAILY_CALL_LIMIT:limit,AI_MAX_OUTPUT_TOKENS:'4000',
+ const env={APP_PASSWORD:'test-only-long-password',APP_ORIGIN:'http://localhost:8787',OPENAI_API_KEY:key,OPENAI_MODEL:'gpt-4.1-mini',OPENAI_TRANSCRIBE_MODEL:'gpt-4o-mini-transcribe',OPENAI_RESEARCH_MODEL:'gpt-4.1-mini',RESEARCH_ALLOWED_HOSTS:'',AI_DAILY_CALL_LIMIT:limit,AI_MAX_OUTPUT_TOKENS:'4000',AI_EXECUTION_POLICY:policy,
   DB:{prepare:sql=>new Statement(db,sql),async batch(statements){db.exec('BEGIN IMMEDIATE');try{const results=statements.map(s=>s.exec());db.exec('COMMIT');return results;}catch(e){db.exec('ROLLBACK');throw e;}}},
   ORIGINALS:{async put(key,bytes){objects.set(key,new Uint8Array(bytes));},async get(key){const bytes=objects.get(key);return bytes?{size:bytes.length,body:new Blob([bytes]).stream(),arrayBuffer:async()=>bytes.slice().buffer}:null;},async delete(key){objects.delete(key);}},
   HARVEST_QUEUE:{async send(message){messages.push(message);}},
