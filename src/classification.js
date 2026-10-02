@@ -32,12 +32,8 @@ export function createShortlistIndex(records) {
  };
 }
 export function shortlist(anchor,records,limit=30){return createShortlistIndex(records)(anchor,limit);}
-export function selectCandidates(output,pool){
- if(!Array.isArray(output)||output.length>30)throw Error('invalid_discovery');const seen=new Set();
+export function selectCandidates(output,pool,limit=10){
+ if(!Array.isArray(output)||output.length>limit)throw Error('invalid_discovery');const seen=new Set();
  const valid=output.map(c=>{const r=pool.find(r=>r.id===c.id);if(!r||seen.has(c.id)||!['common','support','counterexample','condition','analogy','question','same_question'].includes(c.relation)||typeof c.reason!=='string'||!c.reason.trim()||c.reason.length>300||!Number.isInteger(c.relevance)||c.relevance<0||c.relevance>3)throw Error('invalid_discovery');seen.add(c.id);return {...r,...c};}).filter(c=>c.relevance>=2);
- valid.sort((a,b)=>Number(b.near)-Number(a.near)||b.relevance-a.relevance||a.id.localeCompare(b.id));
- const selected=valid.filter(c=>c.near).slice(0,4);const counter=valid.find(c=>['counterexample','condition'].includes(c.relation));if(counter&&!selected.includes(counter)){if(selected.length===4)selected.pop();selected.push(counter);}
- for(const c of valid.filter(c=>!c.near).slice(0,2))if(!selected.includes(c)&&selected.length<5)selected.push(c);
- for(const c of valid)if(!selected.includes(c)&&selected.length<5)selected.push(c);
- return selected.sort((a,b)=>Number(b.near)-Number(a.near)||b.relevance-a.relevance);
+ return valid.sort((a,b)=>b.relevance-a.relevance);
 }

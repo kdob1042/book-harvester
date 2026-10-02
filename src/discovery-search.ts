@@ -4,6 +4,7 @@ import {respond} from './ai-response.ts';
 import {captureMaterials,themeMaterial,type Material} from './knowledge-materials.ts';
 
 export const DISCOVERY_CANDIDATE_LIMIT = 10;
+export const DISCOVERY_RETRIEVAL_LIMIT = 30;
 
 const kinds = ['direct','cause','effect','counterexample','analogy'] as const;
 type Query = {kind:typeof kinds[number];terms:string[]};
@@ -69,14 +70,12 @@ export async function searchDiscovery(env:Env,anchor:Material,queries:Query[]) {
  return lanes;
 }
 
-export function combineDiscovery(anchor:Material,baseline:Material[],lanes:Material[][]):Material[] {
+export function combineDiscovery(anchor:Material,lanes:Material[][]):Material[] {
  const selected:Material[]=[],seen=new Set([anchor.fingerprint]);
  const add=(m:Material) => {if(!seen.has(m.fingerprint)){seen.add(m.fingerprint);selected.push(m);}};
- // Reserve space for expanded searches even when one classification dominates.
- for (const m of baseline.slice(0,5)) add(m);
- for (let i=0;i<24 && selected.length<DISCOVERY_CANDIDATE_LIMIT;i++) for(const lane of lanes) {
-  if(lane[i] && selected.length<DISCOVERY_CANDIDATE_LIMIT) add(lane[i]);
+ // Round-robin retrieval keeps every search direction available for AI judgment.
+ for (let i=0;i<24 && selected.length<DISCOVERY_RETRIEVAL_LIMIT;i++) for(const lane of lanes) {
+  if(lane[i] && selected.length<DISCOVERY_RETRIEVAL_LIMIT) add(lane[i]);
  }
- for(const m of baseline) if(selected.length<DISCOVERY_CANDIDATE_LIMIT) add(m);
  return selected;
 }
