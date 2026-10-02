@@ -2,7 +2,7 @@ import {describeAIAction} from '../public/ai-action-contract.js';
 import {scopeAIOperation} from './ai-cancellation.ts';
 import {beginOperationLease,endOperationLease,getOperation,attachRootJob,attachChildJobs,cancelOperationJobs,operationForMessage,operationSnapshot,finishQueuedRegistration,type Operation} from './ai-operation-jobs.ts';
 const validId=(id:string)=>/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(id);
-type AppWorker={fetch:(request:Request,env:Env,ctx:ExecutionContext)=>Promise<Response>;queue:(batch:MessageBatch<unknown>,env:Env)=>Promise<void>;scheduled:(event:ScheduledController,env:Env)=>Promise<void>};
+type AppWorker={fetch(request:Request,env:Env,ctx:ExecutionContext):Promise<Response>;queue(batch:MessageBatch<unknown>,env:Env):Promise<void>;scheduled(event:ScheduledController,env:Env):Promise<void>};
 // Buffer queue publication until the initiating request's job ownership is durable.
 function bufferQueue(env:Env){
  const pending:{body:unknown;options?:QueueSendOptions}[]=[];
