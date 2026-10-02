@@ -120,3 +120,5 @@ dialog::backdrop { background:#29363045; backdrop-filter:blur(3px); }
 
 .fold { overflow-wrap:anywhere; }
 .menu-panel { max-height:75dvh; overflow-y:auto; }
+
+.knowledge-branch{margin:24px 0 0 18px;border-left:2px solid var(--line,#ddd);padding-left:18px}.knowledge-branch .capture-row{position:relative}.knowledge-branch .capture-row:before{content:"";position:absolute;left:-18px;top:50%;width:18px;border-top:2px solid var(--line,#ddd)}
