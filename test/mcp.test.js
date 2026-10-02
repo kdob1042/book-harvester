@@ -57,3 +57,13 @@ test('bounded exports omit private object keys and support pagination',async()=>
  const page=await callBook(f.env,f.ctx,'export_records',{entity:'captures',limit:1});assert.equal(page.records.length,1);assert.equal(page.records[0].request_key,undefined);assert.equal(page.records[0].request_hash,undefined);
  await assert.rejects(callBook(f.env,f.ctx,'export_records',{entity:'sessions'}),/invalid_export_entity/);await f.settle();
 });
+
+test('unauthorized old backlog cannot starve explicitly authorized queue work',async()=>{
+ const {authorizeAI}=await import('../src/ai-policy.ts');const {graphJobStatement,dispatchGraph}=await import('../src/graph.ts');const {membershipJobStatement,dispatchThemes}=await import('../src/themes.ts');
+ const f=await fixture();f.env.AI_EXECUTION_POLICY='explicit';let target;
+ for(let i=0;i<22;i++){const capture=crypto.randomUUID();target=capture;f.db.prepare("INSERT INTO captures(id,request_key,request_hash,kind,original_text,mutation_id,created_at,updated_at) VALUES(?,?,?,'text','old',?,1,1)").run(capture,'old-key-'+i,'hash',crypto.randomUUID());await f.env.DB.batch([graphJobStatement(f.env,capture,1),membershipJobStatement(f.env,capture,1)]);}
+ await authorizeAI(f.env,'graph',target,1);await authorizeAI(f.env,'membership',target,1);
+ await dispatchGraph(f.env);await dispatchThemes(f.env);
+ assert.equal(f.messages.filter(m=>m.graph_job_id).length,1);assert.equal(f.messages.filter(m=>m.theme_job_id).length,1);
+ const graph=f.db.prepare('SELECT capture_id FROM graph_jobs WHERE id=?').get(f.messages.find(m=>m.graph_job_id).graph_job_id);assert.equal(graph.capture_id,target);
+});

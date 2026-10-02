@@ -42,7 +42,7 @@ export async function dispatchGraph(env:Env){
    WHERE ?=1 AND j.state='completed' AND (NOT EXISTS(SELECT 1 FROM current_graph_generations WHERE id=g.id)
     OR EXISTS(SELECT 1 FROM view_proposals p JOIN views v ON v.id=p.view_id WHERE p.generation_id=g.id AND p.status='pending' AND p.base_version<>v.version)) LIMIT 20)`,time,automaticAI(env)?1:0),
  ]);
- const jobs=await rows<GraphJob>(env,`SELECT * FROM graph_jobs WHERE state='pending' AND available_at<=? AND (dispatched_at IS NULL OR dispatched_at<?) ORDER BY created_at LIMIT 20`,time,time-300000);
+ const jobs=await rows<GraphJob>(env,`SELECT * FROM graph_jobs WHERE state='pending' AND (?=1 OR EXISTS(SELECT 1 FROM explicit_ai_actions a WHERE a.kind='graph' AND a.target_id=graph_jobs.capture_id AND a.version=graph_jobs.version)) AND available_at<=? AND (dispatched_at IS NULL OR dispatched_at<?) ORDER BY created_at LIMIT 20`,automaticAI(env)?1:0,time,time-300000);
  for(const j of jobs){
   if(!await allowedAI(env,'graph',j.capture_id,j.version))continue;
   const claimed=await stmt(env,`UPDATE graph_jobs SET dispatched_at=? WHERE id=? AND state='pending' AND (dispatched_at IS NULL OR dispatched_at<?) RETURNING id`,time,j.id,time-300000).first();
