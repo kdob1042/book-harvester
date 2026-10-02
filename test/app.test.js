@@ -85,6 +85,15 @@ test('unauthenticated API/assets/export and cross-origin mutations are rejected;
  assert.equal((await f.request('/api/captures',{method:'POST',headers:{'Idempotency-Key':key(1)},body:form})).status,415);assert.equal(f.db.prepare('SELECT count(*) AS n FROM captures').get().n,0);
 });
 
+test('AI activity endpoint reports only current provider calls',async t=>{
+ const f=await fixture();t.after(f.close);await f.login();
+ let activity=await (await f.request('/api/ai-activity')).json();assert.deepEqual(activity,{active:false,count:0});
+ f.db.prepare("INSERT INTO ai_calls(id,capture_id,day,endpoint,model,state,created_at) VALUES(?,NULL,?,?,?,?,?)").run('active-call','2026-10-02','responses','fixture','started',Date.now());
+ activity=await (await f.request('/api/ai-activity')).json();assert.deepEqual(activity,{active:true,count:1});
+ f.db.prepare("UPDATE ai_calls SET state='completed' WHERE id='active-call'").run();
+ activity=await (await f.request('/api/ai-activity')).json();assert.deepEqual(activity,{active:false,count:0});
+});
+
 test('source deletion removes originals and AI derivatives while adopted text/history remain',async t=>{
  const f=await fixture();t.after(f.close);await f.login();const captureId=await save(f);await f.drain();await f.request(`/api/captures/${captureId}/adopt`,json('POST',{version:1}));
  assert.equal((await f.request(`/api/captures/${captureId}`,json('DELETE',{version:1}))).status,200);
