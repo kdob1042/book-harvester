@@ -3,6 +3,8 @@ import {AiError} from './ai.ts';
 import {respond} from './ai-response.ts';
 import {captureMaterials,themeMaterial,type Material} from './knowledge-materials.ts';
 
+export const DISCOVERY_CANDIDATE_LIMIT = 10;
+
 const kinds = ['direct','cause','effect','counterexample','analogy'] as const;
 type Query = {kind:typeof kinds[number];terms:string[]};
 const schema = {type:'object',additionalProperties:false,required:['queries'],properties:{queries:{
@@ -71,10 +73,10 @@ export function combineDiscovery(anchor:Material,baseline:Material[],lanes:Mater
  const selected:Material[]=[],seen=new Set([anchor.fingerprint]);
  const add=(m:Material) => {if(!seen.has(m.fingerprint)){seen.add(m.fingerprint);selected.push(m);}};
  // Reserve space for expanded searches even when one classification dominates.
- for (const m of baseline.slice(0,10)) add(m);
- for (let i=0;i<24 && selected.length<30;i++) for(const lane of lanes) {
-  if(lane[i] && selected.length<30) add(lane[i]);
+ for (const m of baseline.slice(0,5)) add(m);
+ for (let i=0;i<24 && selected.length<DISCOVERY_CANDIDATE_LIMIT;i++) for(const lane of lanes) {
+  if(lane[i] && selected.length<DISCOVERY_CANDIDATE_LIMIT) add(lane[i]);
  }
- for(const m of baseline) if(selected.length<30) add(m);
+ for(const m of baseline) if(selected.length<DISCOVERY_CANDIDATE_LIMIT) add(m);
  return selected;
 }

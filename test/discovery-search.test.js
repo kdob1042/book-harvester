@@ -27,7 +27,7 @@ test('AI-expanded search recalls old cross-domain material despite a saturated l
   if(p.text.format.name==='discovery_search_plan_v1')return graphResponse({},{queries:[{kind:'analogy',terms:['燃費','走行距離']}]});
   assert.ok(input.candidates.some(c=>c.id==='old:analogy' && c.search_direction==='analogy'));
   assert.ok(!input.candidates.some(c=>c.id==='hidden:analogy'));
-  assert.ok(input.candidates.length<=30);
+  assert.ok(input.candidates.length<=10);
   return graphResponse({},{candidates:[{id:'old:analogy',relation:'analogy',relevance:3,
    reason:'単価低下が利用増を通じて節約を相殺する仮説を比較できる。交通需要と推論需要の違いは未検証。'}],
    destination:{theme_id:'theme:efficiency',question:title,content:null,scope:'計算資源',exclusions:''}});
@@ -53,7 +53,7 @@ test('expanded directions each get space; fingerprints and the anchor cannot dup
  const m=(id)=>({id,fingerprint:id});
  const candidates=combineDiscovery(m('anchor'),Array.from({length:30},(_,i)=>m(`near:${i}`)),
   ['cause','effect','counterexample','analogy'].map(kind=>[m('anchor'),m('same'),m(kind)]));
- assert.equal(candidates.length,30);
+ assert.equal(candidates.length,10);
  for(const id of ['cause','effect','counterexample','analogy'])assert.ok(candidates.some(c=>c.id===id));
  assert.equal(candidates.filter(c=>c.id==='same').length,1);
  assert.ok(!candidates.some(c=>c.id==='anchor'));
