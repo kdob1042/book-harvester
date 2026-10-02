@@ -1,3 +1,4 @@
+import {automaticAI} from './ai-policy.ts';
 import {aiConfigured} from './chatgpt.ts';
 import {stmt,rows,getCapture,now,id,digest,type Harvest} from './core.ts';
 import {call,AiError} from './ai.ts';
@@ -34,7 +35,7 @@ async function scheduleScope(env:Env,scope:Scope,key:string,start:number,end:num
  await stmt(env,`INSERT INTO reflection_jobs(id,scope,scope_key,start_at,end_at,signature,input_json,available_at,created_at) VALUES(?,?,?,?,?,?,?,?,?)
  ON CONFLICT(scope,scope_key) DO UPDATE SET signature=excluded.signature,input_json=excluded.input_json,start_at=excluded.start_at,end_at=excluded.end_at,state='pending',attempts=0,available_at=excluded.available_at,dispatched_at=NULL,lease_token=NULL,error_code=NULL WHERE signature<>excluded.signature`,id(),scope,key,start,end,signature,body,available,now()).run();
 }
-export async function scheduleReflections(env:Env,captureId:string,eventTime=now()){
+export async function scheduleReflections(env:Env,captureId:string,eventTime=now()){if(!automaticAI(env))return;
  const c=await getCapture(env,captureId);if(!c?.harvest)return;
  const existing=await stmt(env,'SELECT session_id,manual FROM reading_session_members WHERE capture_id=?',c.id).first<{session_id:string;manual:number}>();
  let session=existing?.session_id;
@@ -51,7 +52,7 @@ export async function scheduleReflections(env:Env,captureId:string,eventTime=now
  if(s)await scheduleScope(env,'session',session!,s.started_at,s.ended_at,now()+300000);
  for(const time of new Set([c.created_at,eventTime]))for(const scope of ['day','week'] as const){const p=periodBounds(time,scope);await scheduleScope(env,scope,p.key,p.start,p.end,Math.max(now()+300000,p.end+60000));}
 }
-export async function dispatchReflections(env:Env){
+export async function dispatchReflections(env:Env){if(!automaticAI(env))return;
  const time=now();
  await env.DB.batch([
   stmt(env,`UPDATE reflection_jobs SET state=CASE WHEN attempts>=3 THEN 'failed' ELSE 'pending' END,dispatched_at=NULL,lease_token=NULL,error_code='worker_interrupted' WHERE state='running' AND lease_until<?`,time),
@@ -62,7 +63,7 @@ export async function dispatchReflections(env:Env){
   try{await env.HARVEST_QUEUE.send({reflection_job_id:j.id},{contentType:'json'});}catch{await stmt(env,"UPDATE reflection_jobs SET dispatched_at=NULL WHERE id=? AND state='pending'",j.id).run();}
  }
 }
-export async function processReflection(env:Env,jobId:string,fetcher?:typeof fetch){
+export async function processReflection(env:Env,jobId:string,fetcher?:typeof fetch){if(!automaticAI(env))return;
  const token=id(),job=await stmt(env,`UPDATE reflection_jobs SET state='running',attempts=attempts+1,lease_token=?,lease_until=? WHERE id=? AND state='pending' AND available_at<=? RETURNING *`,token,now()+180000,jobId,now()).first<Job>();if(!job)return;
  try{
   const input=JSON.parse(job.input_json) as Input;

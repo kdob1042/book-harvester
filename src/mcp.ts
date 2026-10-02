@@ -12,10 +12,10 @@ const apiHandler:Required<Pick<ExportedHandler<McpEnv>,'fetch'>>={async fetch(re
  const server=new McpServer({name:'book-harvester',version:'0.1.0'});
  for(const [name,description,scope,properties] of toolSpecs){
   const shape:Record<string,z.ZodType>= {};for(const [key,spec] of Object.entries(properties)){
-   const p=spec as {type:string;enum?:string[];minimum?:number;maximum?:number;items?:{type:string}};let schema:z.ZodType=p.type==='integer'?z.number().int().min(p.minimum??1).max(p.maximum??Number.MAX_SAFE_INTEGER):p.type==='array'?z.array(z.string()).max(20):p.enum?z.enum(p.enum as [string,...string[]]):z.string().max(key==='text'||key==='body'?20000:2000);
+   const p=spec as {type:string;enum?:string[];minimum?:number;maximum?:number;items?:{type:string}};let schema:z.ZodType=p.type==='object'?z.object({download_url:z.string().url().max(8000),file_id:z.string().max(200),mime_type:z.string().max(100).optional(),file_name:z.string().max(150).optional()}).strict():p.type==='integer'?z.number().int().min(p.minimum??1).max(p.maximum??Number.MAX_SAFE_INTEGER):p.type==='array'?z.array(p.items?.type==='integer'?z.number().int().min(1):z.string().max(2000)).min(1).max(20):p.enum?z.enum(p.enum as [string,...string[]]):z.string().max(key==='text'||key==='body'?20000:2000);
    shape[key]=(required[name]||[]).includes(key)?schema:schema.optional();
   }
-  server.registerTool(name,{description,inputSchema:shape,annotations:{readOnlyHint:scope==='book:read',destructiveHint:name==='delete_capture',openWorldHint:name==='start_research',idempotentHint:name==='save_capture'}},async args=>{
+  server.registerTool(name,{description,inputSchema:shape,...'file' in properties?{_meta:{'openai/fileParams':['file']}}:{},annotations:{readOnlyHint:scope==='book:read',destructiveHint:name==='delete_capture',openWorldHint:name==='start_research',idempotentHint:name==='save_capture'}},async args=>{
    if(!auth.auth?.scope.includes(scope))return {isError:true,content:[{type:'text',text:JSON.stringify({error:{code:'insufficient_scope',required:scope}})}]};
    try {
     const a=args as Record<string,unknown>;
@@ -33,7 +33,7 @@ const apiHandler:Required<Pick<ExportedHandler<McpEnv>,'fetch'>>={async fetch(re
     }
     const failed=Boolean((result as {error?:unknown;status?:number}).error)||((result as {status?:number}).status||200)>=400;
     return {isError:failed,content:[{type:'text',text:JSON.stringify(result)}]};
-   }catch{return {isError:true,content:[{type:'text',text:JSON.stringify({error:{code:'operation_failed',message:'Read current version and retry. No success is implied.'}})}]};}
+   }catch(e){const message=e instanceof Error?e.message:'';const codes=['invalid_idempotency_key','version_conflict','confirmation_expired','confirmation_mismatch','idempotency_conflict','operation_in_progress_or_interrupted','theme_context_changed'];return {isError:true,content:[{type:'text',text:JSON.stringify({error:{code:codes.includes(message)?message:'operation_failed',message:'Read current version and operation status before retrying. No success is implied.'}})}]};}
   });
  }
  const transport=new WebStandardStreamableHTTPServerTransport({sessionIdGenerator:undefined,enableJsonResponse:true});await server.connect(transport);return transport.handleRequest(request);

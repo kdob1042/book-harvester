@@ -1,3 +1,4 @@
+import {automaticAI} from './ai-policy.ts';
 import {membershipJobStatement,dispatchThemes,processThemeJob} from './themes.ts';
 import {aiConfigured} from './chatgpt.ts';
 import {scheduleEmbedding,dispatchEmbeddings,processEmbedding} from './semantic.ts';
@@ -62,17 +63,19 @@ export async function processJob(env:Env,jobId:string,fetcher?:typeof fetch) {
    statements.push(stmt(env,`INSERT OR REPLACE INTO settings(key,value) SELECT 'current_source',source_id FROM captures WHERE id=? AND source_locked=0 AND id=(SELECT id FROM captures ORDER BY created_at DESC,rowid DESC LIMIT 1) AND ${guard}`,capture.id,job.id,token));
   }
   statements.push(stmt(env,`UPDATE captures SET page=?,chapter=?,locator_certainty=? WHERE id=? AND source_locked=0 AND ${guard}`,source.page,source.chapter,source.certainty,capture.id,job.id,token));
-  statements.push(graphJobStatement(env,capture.id,job.version,guard,[job.id,token]));
-  statements.push(membershipJobStatement(env,capture.id,job.version,guard,[job.id,token]));
+  if(automaticAI(env))statements.push(graphJobStatement(env,capture.id,job.version,guard,[job.id,token]));
+  if(automaticAI(env))statements.push(membershipJobStatement(env,capture.id,job.version,guard,[job.id,token]));
   statements.push(stmt(env,`UPDATE jobs SET state=CASE WHEN version=(SELECT version FROM captures WHERE id=?) THEN 'completed' ELSE 'superseded' END,
    error_code=NULL,input_tokens=?,output_tokens=?,finished_at=?,lease_token=NULL WHERE id=? AND state='running' AND lease_token=?`,capture.id,output.usage.input_tokens||0,output.usage.output_tokens||0,now(),job.id,token));
   await env.DB.batch(statements);
+  if(automaticAI(env)){
   await scheduleReflections(env,capture.id);
   await scheduleBibliography(env,capture.id,job.version);
   await scheduleEmbedding(env,capture.id,job.version);
   await dispatchEmbeddings(env);
   await dispatchGraph(env);
   await dispatchThemes(env);
+  }
  }catch(e){
   const safe=e instanceof AiError?e:new AiError('processing_failed'),blocked=['ai_not_configured','daily_limit','subscription_reauth_required','subscription_sharing_usage_limit_exceeded','subscription_audio_unsupported'].includes(safe.code);
   const next=blocked?'blocked':safe.retryable&&job.attempts<3?'pending':'failed';

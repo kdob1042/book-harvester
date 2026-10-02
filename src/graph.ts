@@ -1,3 +1,4 @@
+import {automaticAI,allowedAI,authorizeAI} from './ai-policy.ts';
 import {themeCandidateCaptures,relevantViews} from './themes.ts';
 import {aiConfigured} from './chatgpt.ts';
 import {semanticCandidates} from './semantic.ts';
@@ -38,11 +39,12 @@ export async function dispatchGraph(env:Env){
   stmt(env,`UPDATE graph_jobs SET state='pending',attempts=0,error_code=NULL,dispatched_at=NULL,available_at=? WHERE id IN(
    SELECT j.id FROM graph_jobs j JOIN captures c ON c.id=j.capture_id AND c.version=j.version
    JOIN graph_generations g ON g.capture_id=j.capture_id AND g.version=j.version AND g.active=1
-   WHERE j.state='completed' AND (NOT EXISTS(SELECT 1 FROM current_graph_generations WHERE id=g.id)
-    OR EXISTS(SELECT 1 FROM view_proposals p JOIN views v ON v.id=p.view_id WHERE p.generation_id=g.id AND p.status='pending' AND p.base_version<>v.version)) LIMIT 20)`,time),
+   WHERE ?=1 AND j.state='completed' AND (NOT EXISTS(SELECT 1 FROM current_graph_generations WHERE id=g.id)
+    OR EXISTS(SELECT 1 FROM view_proposals p JOIN views v ON v.id=p.view_id WHERE p.generation_id=g.id AND p.status='pending' AND p.base_version<>v.version)) LIMIT 20)`,time,automaticAI(env)?1:0),
  ]);
- const jobs=await rows<GraphJob>(env,`SELECT * FROM graph_jobs WHERE state='pending' AND available_at<=? AND (dispatched_at IS NULL OR dispatched_at<?) ORDER BY created_at LIMIT 20`,time,time-300000);
+ const jobs=await rows<GraphJob>(env,`SELECT * FROM graph_jobs WHERE state='pending' AND (?=1 OR EXISTS(SELECT 1 FROM explicit_ai_actions a WHERE a.kind='graph' AND a.target_id=graph_jobs.capture_id AND a.version=graph_jobs.version)) AND available_at<=? AND (dispatched_at IS NULL OR dispatched_at<?) ORDER BY created_at LIMIT 20`,automaticAI(env)?1:0,time,time-300000);
  for(const j of jobs){
+  if(!await allowedAI(env,'graph',j.capture_id,j.version))continue;
   const claimed=await stmt(env,`UPDATE graph_jobs SET dispatched_at=? WHERE id=? AND state='pending' AND (dispatched_at IS NULL OR dispatched_at<?) RETURNING id`,time,j.id,time-300000).first();
   if(!claimed)continue;
   try{await env.HARVEST_QUEUE.send({graph_job_id:j.id},{contentType:'json'});}catch{await stmt(env,"UPDATE graph_jobs SET dispatched_at=NULL WHERE id=? AND state='pending'",j.id).run();}
@@ -70,6 +72,7 @@ async function candidatesFor(env:Env,captureId:string,h:Harvest):Promise<Candida
 }
 
 export async function processGraphJob(env:Env,jobId:string,fetcher?:typeof fetch){
+ const permit=await stmt(env,'SELECT capture_id,version FROM graph_jobs WHERE id=?',jobId).first<{capture_id:string;version:number}>();if(!permit||!await allowedAI(env,'graph',permit.capture_id,permit.version))return;
  const token=id();
  const job=await stmt(env,`UPDATE graph_jobs SET state='running',attempts=attempts+1,lease_token=?,lease_until=? WHERE id=? AND state='pending' AND available_at<=? RETURNING *`,token,now()+180000,jobId,now()).first<GraphJob>();
  if(!job)return;
@@ -157,6 +160,6 @@ export async function readGraph(env:Env,captureId:string,v:number){
 export async function rebuildGraph(env:Env,captureIds:string[]){
  if(captureIds.length<1||captureIds.length>20)throw new Error('rebuild_limit');
  // Same Harvest versions, stable node references. Old active generations remain until the new batch commits.
- for(const cap of captureIds){await stmt(env,`INSERT INTO graph_jobs(id,capture_id,version,available_at,created_at) SELECT ?,c.id,c.version,?,? FROM captures c JOIN harvests h ON h.capture_id=c.id AND h.version=c.version WHERE c.id=?
+ for(const cap of captureIds){const c=await getCapture(env,cap);if(!c?.harvest)throw new Error('record_not_ready');await authorizeAI(env,'graph',cap,c.version);await stmt(env,`INSERT INTO graph_jobs(id,capture_id,version,available_at,created_at) SELECT ?,c.id,c.version,?,? FROM captures c JOIN harvests h ON h.capture_id=c.id AND h.version=c.version WHERE c.id=?
  ON CONFLICT(capture_id,version) DO UPDATE SET state='pending',attempts=0,error_code=NULL,available_at=excluded.available_at,dispatched_at=NULL WHERE graph_jobs.state NOT IN('running','pending')`,id(),now(),now(),cap).run();}
 }
