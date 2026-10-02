@@ -1,0 +1,3 @@
+CREATE TABLE explicit_ai_actions (kind TEXT NOT NULL, target_id TEXT NOT NULL, version INTEGER NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY(kind,target_id));
+CREATE TABLE theme_analysis_drafts (id TEXT PRIMARY KEY, theme_id TEXT NOT NULL REFERENCES themes(id), theme_version INTEGER NOT NULL, body TEXT NOT NULL, references_json TEXT NOT NULL, request_key TEXT UNIQUE NOT NULL, request_hash TEXT NOT NULL, origin TEXT NOT NULL DEFAULT 'ai_conversation', created_at INTEGER NOT NULL);
+CREATE TABLE book_operation_receipts (operation_key TEXT PRIMARY KEY, request_hash TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'running', result_json TEXT, created_at INTEGER NOT NULL);

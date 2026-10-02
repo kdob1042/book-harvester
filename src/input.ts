@@ -43,7 +43,7 @@ export async function captureInput(request:Request):Promise<Input> {
   if(file.size>MAX_UPLOAD) fail(413,'ファイルは10MB以下にしてください。');
   const data=new Uint8Array(await file.arrayBuffer()),detected=sniff(data);
   if(!detected||file.type.startsWith('image/')!==detected[0].startsWith('image/')) fail(415,'JPEG・PNG・WebP画像、または対応した音声ファイルを選んでください。');
-  input={text:'',note:text(form.get('note')||''),asset:{bytes:data,mime:detected[0],name:`original.${detected[1]}`}};
+  input={text:'',note:text(form.get('note')||''),...form.has('source')?{source:text(form.get('source')||'',2000)}:{},asset:{bytes:data,mime:detected[0],name:`original.${detected[1]}`}};
  }
  const fingerprint=await digest(`${JSON.stringify({text:input.text,note:input.note,...(input.source!==undefined?{source:input.source}:{}),mime:input.asset?.mime})}:${input.asset?await digest(input.asset.bytes):''}`);
  return {...input,hash:fingerprint};

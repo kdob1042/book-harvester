@@ -1,3 +1,4 @@
+import {automaticAI} from './ai-policy.ts';
 import {stmt,rows,id,now,getCapture} from './core.ts';
 export function isbnFrom(text:string){
  for(const match of text.matchAll(/(?:ISBN(?:-1[03])?\s*[:：]?\s*)?((?:97[89][- ]?)?\d[\d -]{8,20}[\dXx])/g)){
@@ -14,10 +15,10 @@ export async function lookupBibliography(text:string,title:string|null,fetcher:t
  const {boundedBody}=await import('./core.ts');const data=JSON.parse(new TextDecoder().decode(await boundedBody(new Request('http://localhost',{method:'POST',body:response.body,duplex:'half'} as RequestInit),100000))) as {docs?:Record<string,unknown>[]};
  return (data.docs||[]).slice(0,3).flatMap(d=>{if(typeof d.title!=='string'||typeof d.key!=='string'||!/^\/works\/OL\d+W$/.test(d.key))return [];return [{title:d.title.slice(0,500),authors:Array.isArray(d.author_name)?d.author_name.filter(x=>typeof x==='string').slice(0,10):[],first_publish_year:typeof d.first_publish_year==='number'?d.first_publish_year:null,edition:Array.isArray(d.edition_key)&&typeof d.edition_key[0]==='string'?d.edition_key[0]:null,url:`https://openlibrary.org${d.key}`,isbn,match:isbn?'isbn':'title_candidate'} satisfies Candidate];});
 }
-export async function scheduleBibliography(env:Env,captureId:string,v:number){
+export async function scheduleBibliography(env:Env,captureId:string,v:number){if(!automaticAI(env))return;
  await stmt(env,`INSERT INTO bibliography_jobs(capture_id,version,available_at) VALUES(?,?,?) ON CONFLICT(capture_id) DO UPDATE SET version=excluded.version,state='pending',attempts=0,error_code=NULL,available_at=excluded.available_at,dispatched_at=NULL,lease_token=NULL WHERE version<>excluded.version`,captureId,v,now()).run();
 }
-export async function processBibliography(env:Env,captureId:string,fetcher:typeof fetch=fetch){
+export async function processBibliography(env:Env,captureId:string,fetcher:typeof fetch=fetch){if(!automaticAI(env))return;
  const token=id(),j=await stmt(env,"UPDATE bibliography_jobs SET state='running',attempts=attempts+1,lease_token=?,lease_until=? WHERE capture_id=? AND state='pending' AND available_at<=? RETURNING version",token,now()+30000,captureId,now()).first<{version:number}>();if(!j)return;
  try{
   const c=await getCapture(env,captureId);if(!c?.harvest||c.version!==j.version){await stmt(env,"UPDATE bibliography_jobs SET state='superseded',lease_token=NULL WHERE capture_id=? AND lease_token=?",captureId,token).run();return;}
@@ -29,7 +30,7 @@ export async function processBibliography(env:Env,captureId:string,fetcher:typeo
   await env.DB.batch([stmt(env,`UPDATE sources SET bibliography_json=? WHERE id=? AND EXISTS(SELECT 1 FROM captures WHERE id=? AND version=? AND source_id=sources.id) AND EXISTS(SELECT 1 FROM bibliography_jobs WHERE capture_id=? AND lease_token=?)`,metadata,c.source_id,captureId,j.version,captureId,token),stmt(env,"UPDATE bibliography_jobs SET state='completed',lease_token=NULL,error_code=NULL WHERE capture_id=? AND lease_token=?",captureId,token)]);
  }catch{await stmt(env,"UPDATE bibliography_jobs SET state=CASE WHEN attempts<3 THEN 'pending' ELSE 'failed' END,error_code='bibliography_unavailable',lease_token=NULL,dispatched_at=NULL,available_at=? WHERE capture_id=? AND lease_token=?",now()+60000,captureId,token).run();}
 }
-export async function dispatchBibliography(env:Env){
+export async function dispatchBibliography(env:Env){if(!automaticAI(env))return;
  await stmt(env,"UPDATE bibliography_jobs SET state=CASE WHEN attempts>=3 THEN 'failed' ELSE 'pending' END,error_code='worker_interrupted',dispatched_at=NULL,lease_token=NULL WHERE state='running' AND lease_until<?",now()).run();
  // One dispatched request per minute; cached queries do not hit the public API.
  const j=await stmt(env,"UPDATE bibliography_jobs SET dispatched_at=? WHERE capture_id=(SELECT capture_id FROM bibliography_jobs WHERE state='pending' AND available_at<=? AND (dispatched_at IS NULL OR dispatched_at<?) ORDER BY available_at LIMIT 1) AND NOT EXISTS(SELECT 1 FROM settings WHERE key='bibliography_last_dispatch' AND CAST(value AS INTEGER)>?) RETURNING capture_id",now(),now(),now()-300000,now()-60000).first<{capture_id:string}>();if(!j)return;

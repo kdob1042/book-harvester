@@ -76,6 +76,7 @@
         "ACCESS_AUD": "aa6602f20c3014cfb9798f3060bc633469e2fd3bf4227fdd838a4bece437d39c",
         "ACCESS_EMAIL": "kdob1042@gmail.com",
         "AI_AUTH_MODE": "chatgpt",
+        "AI_EXECUTION_POLICY": "explicit",
         "ACCESS_TEAM_DOMAIN": "https://kdob1042.cloudflareaccess.com"
       },
       "d1_databases": [

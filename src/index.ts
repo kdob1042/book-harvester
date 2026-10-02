@@ -1,3 +1,5 @@
+import {automaticAI} from './ai-policy.ts';
+import {themeContext,saveAnalysis,rebuildTheme,discover} from './book-actions.ts';
 import {listThemes,readTheme,captureThemes,actThemeProposal,themeMigrationStatus,manageThemeMigration,editTheme,overrideTheme,mergeTheme} from './themes.ts';
 import {aiConfigured,chatgptStatus,disconnectChatgpt} from './chatgpt.ts';
 import {ownerScope,syncDelta,receiptStatement,replayReceipt} from './sync.ts';
@@ -117,7 +119,7 @@ async function adoptProposal(request:Request,env:Env,captureId:string){
  if(p.status==='adopted')return json({id:p.view_id,duplicate:true});
  const v=await stmt(env,'SELECT * FROM views WHERE id=?',p.view_id).first<View>();
  if(!v||v.version!==p.base_version||v.body.split(p.from_text).length!==2){
-  await rebuildGraph(env,[captureId]);fail(409,'見方が更新されたため、現行版と自動で比較し直します。');
+  if(automaticAI(env))await rebuildGraph(env,[captureId]);fail(409,'見方が更新されたため、現行版を読み直してください。');
  }
  const body=v.body.replace(p.from_text,p.to_text),time=now();
  const prior=await stmt(env,'SELECT references_json FROM view_revisions WHERE view_id=? AND version=?',v.id,v.version).first<{references_json:string}>();
@@ -230,6 +232,8 @@ export async function route(request:Request,env:Env,ctx:ExecutionContext,trusted
  if(!path.startsWith('/api/'))return env.ASSETS.fetch(request);
  if(!trustedService&&!env.ACCESS_AUD&&!await loggedIn(request,env))fail(401,'ログインしてください。');
  const replay=await replayReceipt(env,request);if(replay)return json(replay);
+ if(path==='/api/book/discover'&&method==='POST')return json(await discover(env,ctx,await jsonBody(request.clone())),202);
+ const themeAction=/^\/api\/themes\/([^/]+)\/(context|analysis|rebuild)$/.exec(path);if(themeAction){const a={...await (method==='GET'?Promise.resolve({}):jsonBody(request.clone())),id:decodeURIComponent(themeAction[1])};if(themeAction[2]==='context'&&method==='GET')return json(await themeContext(env,a.id));if(themeAction[2]==='analysis'&&method==='POST')return json(await saveAnalysis(env,a),201);if(themeAction[2]==='rebuild'&&method==='POST')return json(await rebuildTheme(env,ctx,a),202);}
  if(path==='/api/themes/migration'&&method==='GET')return json(await themeMigrationStatus(env));
  if(path==='/api/themes/migration'&&method==='POST'){const r=await manageThemeMigration(env,await jsonBody(request.clone()));ctx.waitUntil(dispatch(env));return json(r);}
  if(path==='/api/themes'&&method==='GET')return json(await listThemes(env));
