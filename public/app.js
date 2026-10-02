@@ -9,6 +9,7 @@ let state, currentCapture = null, currentView = null, query = '', recorder = nul
 let searchFilters={source:'',year:'',origin:''};
 const searchPath=()=>`/api/state?q=${encodeURIComponent(query)}&source=${encodeURIComponent(searchFilters.source)}&year=${encodeURIComponent(searchFilters.year)}&origin=${encodeURIComponent(searchFilters.origin)}`;
 let noticeTimer, searchTimer, pollBusy = false, authMethod = null, reauthenticating = false;
+let aiForeground = 0, aiRemote = false, aiVisibleUntil = 0, aiPollBusy = false;
 const errors = {
   subscription_reauth_required:'原資料は保存済みです。パソコンから ChatGPT に再接続してください。',
   subscription_sharing_usage_limit_exceeded:'原資料は保存済みです。サブスク枠の回復後に再試行します。',
@@ -28,7 +29,29 @@ function showNotice(text) {
   clearTimeout(noticeTimer); notice.textContent = text;
   noticeTimer = setTimeout(() => { notice.textContent = ''; }, 4500);
 }
-async function api(path,options={}){try{return await deviceRequest(path,options);}catch(error){if([401,403].includes(error.status)&&path!=='/api/login'){closeDialog();login();}throw error;}}
+const aiRequest = (path,options={}) => {
+  const method=(options.method||'GET').toUpperCase();
+  if(method==='GET')return false;
+  return path==='/api/captures'||/\/assets$/.test(path)||/\/retry$/.test(path)||/\/ask$/.test(path)||path==='/api/book/discover'||path==='/api/book/integrate'||/^\/api\/themes\/[^/]+\/rebuild$/.test(path)||path==='/api/research'||path==='/api/theme-changes'||path==='/api/concept-edits';
+};
+function syncAiActivity(){
+  const indicator=$('#ai-activity');if(!indicator)return;
+  indicator.hidden=!(aiForeground>0||aiRemote||Date.now()<aiVisibleUntil);
+}
+async function refreshAiActivity(){
+  if(!state||document.hidden||aiPollBusy)return;
+  aiPollBusy=true;
+  try{const result=await deviceRequest('/api/ai-activity');aiRemote=Boolean(result.active);if(aiRemote)aiVisibleUntil=Math.max(aiVisibleUntil,Date.now()+1400);}
+  catch{/* Advisory only: normal requests surface connectivity errors. */}
+  finally{aiPollBusy=false;syncAiActivity();}
+}
+async function api(path,options={}){
+  const tracked=aiRequest(path,options);
+  if(tracked){aiForeground++;aiVisibleUntil=Math.max(aiVisibleUntil,Date.now()+1400);syncAiActivity();}
+  try{return await deviceRequest(path,options);}
+  catch(error){if([401,403].includes(error.status)&&path!=='/api/login'){closeDialog();login();}throw error;}
+  finally{if(tracked){aiForeground=Math.max(0,aiForeground-1);aiVisibleUntil=Math.max(aiVisibleUntil,Date.now()+1400);syncAiActivity();setTimeout(syncAiActivity,1500);}}
+}
 
 const json = (method, data) => ({ method, headers:{ 'Content-Type':'application/json' }, body:JSON.stringify(data) });
 
@@ -56,6 +79,7 @@ function login() {
 
 function header(record = true, primary = true) {
   return `<header class="top"><div class="brand"><img src="/favicon.svg" alt="">Book Harvester</div><div class="top-actions">
+    <span id="ai-activity" class="ai-activity" hidden role="status" aria-label="AI処理中" title="AI処理中"><span class="ai-activity-label">AI</span><span class="ai-activity-dots" aria-hidden="true"><i></i><i></i><i></i></span></span>
     ${record ? `<button id="record" class="${primary?'primary':'quiet'}">記録する<span aria-hidden="true">＋</span></button>` : ''}
     <details class="menu"><summary aria-label="メニュー">···</summary><div class="menu-panel">
     <label><span>記録を検索</span><input id="search" type="search" placeholder="曖昧な言葉でも" value="${esc(query)}"></label>
@@ -63,6 +87,7 @@ function header(record = true, primary = true) {
     <button id="device-menu">端末の保存状況</button><button id="logout">閉じる</button></div></details></div></header>`;
 }
 function wireHeader() {
+  syncAiActivity();
   bind('#record', 'click', () => recordDialog());
   bind('#search', 'input', event => {
     query = event.target.value;
@@ -85,7 +110,7 @@ async function home() {
   app.innerHTML = `${header()}<section class="intro"><p class="eyebrow">READ · LEAVE · THINK</p>
     <h1>理解を育てる。</h1><p>${state.current_source ? `${esc(state.current_source.title)}<br>前回の本を引き継ぎます。表紙を残すと、本も切り替わります。` : '本の一節も、自分の気づきも。<br>記録から、同じ問いの理解が育ちます。'}</p></section><section id="feed"></section>`;
   app.removeAttribute('aria-busy'); wireHeader(); renderFeed();
-  cacheRecent(state).catch(()=>{});
+  refreshAiActivity(); cacheRecent(state).catch(()=>{});
 }
 function renderFeed() {
   if (!$('#feed')) return;
@@ -403,6 +428,10 @@ function privacyDialog() {
    catch(e){event.target.checked=false;try{localStorage.setItem('reflection-notifications','off');}catch{}$('#notification-error').textContent=e.message;}
   });
 }
+
+// Keep the tiny AI indicator accurate even while the user is reading another screen.
+setInterval(()=>refreshAiActivity(),3000);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)refreshAiActivity();});
 
 // Poll only small summaries. Never replace an open editor or an expanded source while reading.
 setInterval(async () => {
