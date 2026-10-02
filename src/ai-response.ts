@@ -1,5 +1,5 @@
 import {fail} from './core.ts';
-import {call,AiError} from './ai.ts';
+import {call,responseJson} from './ai.ts';
 
 export async function respond(env:Env, name:string, schema:unknown, instructions:string, input:unknown, fetcher?:typeof fetch) {
  instructions += ' 主題questionと内容contentをセットで参照する。内容は問題意識や仮説であり原根拠ではない。新しい親の問いでは元の問題意識を保ったcontentを生成する。';
@@ -10,7 +10,5 @@ export async function respond(env:Env, name:string, schema:unknown, instructions
   max_output_tokens:Number(env.AI_MAX_OUTPUT_TOKENS),
   text:{format:{type:'json_schema',name,strict:true,schema}}
  },fetcher);
- if (response.status === 'incomplete') throw new AiError('incomplete_output');
- return JSON.parse((response.output || []).flatMap(o => o.content || [])
-  .filter(b => b.type === 'output_text').map(b => b.text).join(''));
+ return responseJson(response);
 }
