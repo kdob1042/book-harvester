@@ -14,7 +14,8 @@
     "types": "wrangler types --include-runtime false --strict-vars false",
     "migrate": "wrangler d1 migrations apply DB --local",
     "deploy": "node scripts/deploy.mjs",
-    "test:browser": "node scripts/browser-smoke.mjs && node scripts/expansion-smoke.mjs"
+    "test:browser": "node scripts/browser-smoke.mjs && node scripts/expansion-smoke.mjs",
+    "connect:chatgpt": "node scripts/connect-chatgpt.mjs"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20261001.1",
@@ -26,6 +27,7 @@
   "dependencies": {
     "fast-xml-parser": "^5.5.8",
     "fflate": "^0.8.3",
+    "jose": "^6.2.12",
     "unpdf": "^1.8.1"
   }
 }

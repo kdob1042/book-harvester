@@ -1,9 +1,27 @@
+import {createRemoteJWKSet,jwtVerify,type JWTVerifyGetKey} from 'jose';
 import { timingSafeEqual } from 'node:crypto';
 import { digest,stmt,now } from './core.ts';
 
-export async function accessAuthorized(env:Env,ctx:ExecutionContext) {
- if(!env.ACCESS_AUD||!env.ACCESS_EMAIL||ctx.access?.aud!==env.ACCESS_AUD)return false;
- try {const identity=await ctx.access.getIdentity();return identity?.email?.toLowerCase()===env.ACCESS_EMAIL.toLowerCase();}catch{return false;}
+const accessKeys=new Map<string,ReturnType<typeof createRemoteJWKSet>>();
+export async function verifyAccessJwt(env:Env,token:string,keys?:JWTVerifyGetKey|CryptoKey) {
+ if(!env.ACCESS_AUD||!env.ACCESS_EMAIL||!env.ACCESS_TEAM_DOMAIN)return false;
+ try {
+  const issuer=new URL(env.ACCESS_TEAM_DOMAIN);if(issuer.protocol!=='https:'||!issuer.hostname.endsWith('.cloudflareaccess.com')||issuer.pathname!=='/')return false;
+  let resolver=keys;if(!resolver){resolver=accessKeys.get(issuer.origin);if(!resolver){const remote=createRemoteJWKSet(new URL('/cdn-cgi/access/certs',issuer),{timeoutDuration:10000});accessKeys.set(issuer.origin,remote);resolver=remote;}}
+  const {payload}=await jwtVerify(token,resolver as JWTVerifyGetKey,{issuer:issuer.origin,audience:env.ACCESS_AUD,algorithms:['RS256'],requiredClaims:['exp','sub','email']});
+  return typeof payload.email==='string'&&payload.email.toLowerCase()===env.ACCESS_EMAIL.toLowerCase();
+ }catch{return false;}
+}
+export async function accessAuthorized(env:Env,ctx:ExecutionContext,request?:Request) {
+ if(!env.ACCESS_AUD||!env.ACCESS_EMAIL)return false;
+ if(ctx.access){
+  if(ctx.access.aud!==env.ACCESS_AUD)return false;
+  try{const identity=await ctx.access.getIdentity();if(identity?.email)return identity.email.toLowerCase()===env.ACCESS_EMAIL.toLowerCase();}catch{}
+ }
+ // Some Access routes do not expose runtime identity. Verify the signed application
+ // token against the configured team's public keys; never trust the email header.
+ const token=request?.headers.get('cf-access-jwt-assertion')||/(?:^|;\s*)CF_Authorization=([^;]+)/.exec(request?.headers.get('cookie')||'')?.[1];
+ return token?verifyAccessJwt(env,token):false;
 }
 export const credentialGeneration=(env:Env)=>env.ACCESS_AUD?`access:${env.ACCESS_AUD}:${env.ACCESS_EMAIL?.toLowerCase()}`:env.APP_PASSWORD;
 

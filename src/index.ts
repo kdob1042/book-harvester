@@ -1,3 +1,4 @@
+import {aiConfigured,chatgptStatus,disconnectChatgpt} from './chatgpt.ts';
 import {ownerScope,syncDelta,receiptStatement,replayReceipt} from './sync.ts';
 import {semanticSearch} from './semantic.ts';
 import {neighborhood,proposeConceptEdit,readConceptEdit,applyConceptEdit} from './exploration.ts';
@@ -217,7 +218,7 @@ function exportData(env:Env){
 
 async function route(request:Request,env:Env,ctx:ExecutionContext){
  const url=new URL(request.url),path=url.pathname,method=request.method;
- if(env.ACCESS_AUD&&!await accessAuthorized(env,ctx))fail(403,'Cloudflareで本人のアカウントにログインしてください。');
+ if(env.ACCESS_AUD&&!await accessAuthorized(env,ctx,request))fail(403,'Cloudflareで本人のアカウントにログインしてください。');
  if(!['GET','HEAD'].includes(method)&&request.headers.get('origin')!==env.APP_ORIGIN)fail(403,'この画面から操作し直してください。');
  if(path==='/healthz'&&method==='GET')return json({ok:true});
  if(path==='/api/login'&&method==='POST'){
@@ -239,7 +240,7 @@ async function route(request:Request,env:Env,ctx:ExecutionContext){
    listReflections(env),readRevisit(env),
    rows(env,'SELECT id,name,format,state,error_code FROM import_jobs ORDER BY created_at DESC LIMIT 10'),
   ]);
-  return json({scope:await ownerScope(env),auth_method:env.ACCESS_AUD?'cloudflare_access':'password',ai_configured:Boolean(env.OPENAI_API_KEY),captures:search?captures.sort((a,b)=>(semantic.matches.find(x=>x.capture_id===b.id)?.score||0)-(semantic.matches.find(x=>x.capture_id===a.id)?.score||0)):captures,filter_active:Boolean(filters.source||filters.year||filters.origin),search_state:semantic.state,semantic_matches:semantic.matches,views,reflections,revisits,imports,research:await rows(env,'SELECT id,question,state FROM research_runs ORDER BY created_at DESC LIMIT 10'),current_source:current,usage:{calls:usage?.calls||0},daily_limit:Number(env.AI_DAILY_CALL_LIMIT)});
+  const ai=await chatgptStatus(env);return json({scope:await ownerScope(env),auth_method:env.ACCESS_AUD?'cloudflare_access':'password',ai_configured:ai.mode==='chatgpt'?ai.state==='connected':aiConfigured(env),ai,captures:search?captures.sort((a,b)=>(semantic.matches.find(x=>x.capture_id===b.id)?.score||0)-(semantic.matches.find(x=>x.capture_id===a.id)?.score||0)):captures,filter_active:Boolean(filters.source||filters.year||filters.origin),search_state:semantic.state,semantic_matches:semantic.matches,views,reflections,revisits,imports,research:await rows(env,'SELECT id,question,state FROM research_runs ORDER BY created_at DESC LIMIT 10'),current_source:current,usage:{calls:usage?.calls||0},daily_limit:Number(env.AI_DAILY_CALL_LIMIT)});
  }
  if(path==='/api/captures'&&method==='POST'){
   const saved=await saveCapture(request,env);ctx.waitUntil(dispatch(env));return saved;
@@ -296,6 +297,7 @@ async function route(request:Request,env:Env,ctx:ExecutionContext){
   }
   if(method==='PATCH'){const saved=await editView(request,env,viewMatch[1]);ctx.waitUntil(scheduleReflections(env,(await stmt(env,'SELECT capture_id FROM views WHERE id=?',viewMatch[1]).first<string>('capture_id'))!).then(()=>dispatch(env)));return saved;}
  }
+ if(path==='/api/ai/disconnect'&&method==='POST'){await disconnectChatgpt(env);return json({ok:true});}
  if(path==='/api/graph/neighborhood'&&method==='GET')return json(await neighborhood(env,url.searchParams.get('capture_id')||'',url.searchParams.get('focus')));
  if(path==='/api/concept-edits'&&method==='GET')return json(await rows(env,'SELECT id,action,reason,state,created_at FROM concept_edits ORDER BY created_at DESC LIMIT 20'));
  if(path==='/api/concept-edits'&&method==='POST')return json(await proposeConceptEdit(env,await jsonBody(request.clone())),201);
