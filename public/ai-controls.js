@@ -1,11 +1,13 @@
 import {describeAIAction,isActiveOperation} from './ai-action-contract.js';
 const runs=new Map(),inFlight=new Map();
+let activityAdapter=null,sessionEpoch=0;
+export function registerAIActivityAdapter(adapter){activityAdapter=adapter;if(host)host.hidden=true;}
 let host,observer,pollTimer,polling=false,enabled=false,lastButton=null,lastClick=0,automaticIngestion=false;
 const terminal=state=>['completed','canceled','failed'].includes(state);
 const stopError=()=>Object.assign(new Error('AI処理を停止しました。'),{canceled:true});
 function save(){try{sessionStorage.setItem('book-ai-operations',JSON.stringify([...runs.values()].filter(r=>!terminal(r.state)).map(({id,label,mode,state})=>({id,label,mode,state}))));}catch{}}
 function mount(){
- if(!host)return;
+ if(!host||activityAdapter)return;
  const dialogs=[...document.querySelectorAll('dialog[open]')],parent=dialogs.at(-1)||document.body;
  if(host.parentNode!==parent){if(parent===document.body)parent.append(host);else parent.insertBefore(host,parent.querySelector('.dialog-head')?.nextSibling||parent.firstChild);}
  host.classList.toggle('ai-controls-in-dialog',parent!==document.body);
@@ -20,9 +22,11 @@ function initialize(){
  window.addEventListener('online',()=>schedulePoll(0));
  window.addEventListener('device-auth-expired',reset);
 }
-function reset(){enabled=false;clearTimeout(pollTimer);runs.clear();inFlight.clear();save();render();}
+function reset(){sessionEpoch++;enabled=false;clearTimeout(pollTimer);runs.clear();inFlight.clear();save();render();}
 function render(){
- if(!host)return;mount();host.hidden=runs.size===0;
+ if(!host)return;
+ if(activityAdapter){host.hidden=true;for(const run of runs.values())activityAdapter.update(run,()=>cancelRun(run));return;}
+ mount();host.hidden=runs.size===0;
  const activeIds=new Set(runs.keys());
  for(const child of [...host.children])if(!activeIds.has(child.dataset.operation))child.remove();
  for(const run of runs.values()){
@@ -46,7 +50,6 @@ function render(){
 }
 function update(run,value){
  if(!value||!value.state||value.state==='not_found')return;
- // A status poll sent before cancellation must not resurrect a stopped operation.
  if(run.stopConfirmed&&value.state!=='canceled')return;
  if(run.state==='stopping'&&!terminal(value.state))return;
  run.state=value.state;if(value.label)run.label=value.label;
@@ -74,19 +77,19 @@ async function cancelRun(run){
 function schedulePoll(delay=1500){clearTimeout(pollTimer);if(enabled)pollTimer=setTimeout(poll,delay);}
 async function poll(){
  if(!enabled||document.hidden||polling){schedulePoll();return;}
- polling=true;
+ polling=true;const epoch=sessionEpoch;
  try{
   const local=[...runs.values()].filter(r=>isActiveOperation(r.state));
   for(const run of local){
-   try{update(run,await control(`/api/ai-operations/${run.id}`));}
+   try{const value=await control(`/api/ai-operations/${run.id}`);if(epoch!==sessionEpoch||!enabled)return;update(run,value);}
    catch{if(run.state!=='stopping'&&!run.stopConfirmed){run.state='unknown';render();}}
   }
-  const remote=await control('/api/ai-operations');
+  const remote=await control('/api/ai-operations');if(epoch!==sessionEpoch||!enabled)return;
   for(const value of remote.operations||[]){
    if(!value||terminal(value.state)||runs.has(value.id))continue;
    const run={...value};runs.set(value.id,run);update(run,value);
   }
- }catch{/* Keep visible, stoppable local operations when status cannot be verified. */}
+ }catch{/* Keep stoppable local operations when status cannot be verified. */}
  finally{polling=false;schedulePoll([...runs.values()].some(r=>isActiveOperation(r.state))?1500:6000);}
 }
 function operationKey(path,options,spec){
@@ -94,8 +97,7 @@ function operationKey(path,options,spec){
  let body=options.body;try{body=JSON.parse(body);delete body.idempotency_key;}catch{}
  return `${options.method}:${path}:${typeof body==='string'?body:JSON.stringify(body)}`;
 }
-// Called before any IndexedDB or network await. Every screen, including dialogs,
-// uses the same request boundary rather than maintaining a separate spinner list.
+// Display before any IndexedDB or network await, on every screen.
 export function requestWithAIControls(path,options,request){
  initialize();
  const action=describeAIAction(path,options.method||'GET');
@@ -112,7 +114,6 @@ export function requestWithAIControls(path,options,request){
  runs.set(id,run);run.button?.setAttribute('aria-busy','true');save();render();schedulePoll();
  const work=(async()=>{
   try{
-   // Let the state become visible before doing expensive work or waiting on storage.
    await new Promise(resolve=>{const timer=setTimeout(resolve,50);requestAnimationFrame(()=>{clearTimeout(timer);resolve();});});
    if(run.stopConfirmed&&spec.mode!=='ingestion')throw stopError();
    if(spec.mode==='inline'){run.state='running';render();}
@@ -126,7 +127,7 @@ export function requestWithAIControls(path,options,request){
    return data;
   }catch(e){
    if(run.stopConfirmed||e.canceled){update(run,{state:'canceled'});throw stopError();}
-   update(run,{state:'failed'});throw e;
+   update(run,{state:e.status?'failed':'unknown'});throw e;
   }finally{run.button?.removeAttribute('aria-busy');if(key)inFlight.delete(key);}
  })();
  if(key)inFlight.set(key,work);return work;

@@ -1,4 +1,5 @@
 import {setDeviceAuthMethod,deviceRequest,initDevice,cacheRecent,pendingOperations,discardOperation,clearReadingCache,exportDevice,discardAllOutbox,resolveConflict,resume,lockDevice,deviceSettings,setDeviceSettings} from './offline.js';
+import {createAiActivity} from './ai-activity.js';
 const app = document.querySelector('#app');
 const dialog = document.querySelector('#dialog');
 const notice = document.querySelector('#notice');
@@ -9,7 +10,8 @@ let state, currentCapture = null, currentView = null, query = '', recorder = nul
 let searchFilters={source:'',year:'',origin:''};
 const searchPath=()=>`/api/state?q=${encodeURIComponent(query)}&source=${encodeURIComponent(searchFilters.source)}&year=${encodeURIComponent(searchFilters.year)}&origin=${encodeURIComponent(searchFilters.origin)}`;
 let noticeTimer, searchTimer, pollBusy = false, authMethod = null, reauthenticating = false;
-let aiForeground = 0, aiRemote = false, aiVisibleUntil = 0, aiPollBusy = false;
+const aiActivity = createAiActivity(), aiWatches = new Map();
+let aiPollBusy = false;
 const errors = {
   subscription_reauth_required:'原資料は保存済みです。パソコンから ChatGPT に再接続してください。',
   subscription_sharing_usage_limit_exceeded:'原資料は保存済みです。サブスク枠の回復後に再試行します。',
@@ -29,28 +31,94 @@ function showNotice(text) {
   clearTimeout(noticeTimer); notice.textContent = text;
   noticeTimer = setTimeout(() => { notice.textContent = ''; }, 4500);
 }
-const aiRequest = (path,options={}) => {
-  const method=(options.method||'GET').toUpperCase();
-  if(method==='GET')return false;
-  return (/\/extract$/.test(path))||/\/retry$/.test(path)||/\/ask$/.test(path)||path.startsWith('/api/book/integration-proposals')||path==='/api/book/discover'||path==='/api/book/integrate'||/^\/api\/themes\/[^/]+\/rebuild$/.test(path)||path==='/api/research'||path==='/api/theme-changes'||path==='/api/concept-edits';
-};
-function syncAiActivity(){
-  const indicator=$('#ai-activity');if(!indicator)return;
-  indicator.hidden=!(aiForeground>0||aiRemote||Date.now()<aiVisibleUntil);
+function aiDescriptor(path, options) {
+  if((options.method||'GET').toUpperCase()!=='POST')return null;
+  let data={};try{if(typeof options.body==='string')data=JSON.parse(options.body);}catch{}
+  const theme=/^\/api\/themes\/([^/]+)\/(drilldown|relationships|rebuild)$/.exec(path);
+  const capture=/^\/api\/captures\/([^/]+)\/(ask|retry|extract)$/.exec(path);
+  const imported=/^\/api\/imports\/([^/]+)\/extract$/.exec(path);
+  const research=/^\/api\/research\/([^/]+)\/retry$/.exec(path);
+  let label, open, watch, cancel;
+  if(theme){
+    const id=decodeURIComponent(theme[1]);label={drilldown:'深掘り',relationships:'関係探索',rebuild:'理解更新'}[theme[2]];open=()=>openTheme(id);
+    if(theme[2]==='rebuild')watch=()=>deviceRequest(`/api/themes/${encodeURIComponent(id)}`).then(r=>r.job);
+  }else if(capture){
+    const id=capture[1];label=capture[2]==='ask'?'回答生成':'知見抽出';open=()=>openCapture(id);
+    if(capture[2]!=='ask'){
+      watch=()=>deviceRequest(`/api/captures/${id}`).then(r=>r.job);
+      cancel=()=>deviceRequest(`/api/captures/${id}/cancel-extraction`,json('POST',{version:data.version}));
+    }
+  }else if(imported){
+    const id=imported[1];label='知見抽出';open=()=>openImport(id);
+    watch=async()=>{
+      const job=await deviceRequest(`/api/imports/${id}`);
+      if(['pending','running','failed','canceled'].includes(job.state))return job;
+      const captureIds=job.items.filter(i=>i.capture_id).map(i=>i.capture_id);
+      if(!captureIds.length)return {state:job.state==='partial'?'failed':'waiting',error:job.state==='partial'?'一部の抽出に失敗しました。':'対象の範囲を選んでください。'};
+      const jobs=await Promise.all(captureIds.map(id=>deviceRequest(`/api/captures/${id}`).then(r=>r.job)));
+      return jobs.find(j=>['running','pending'].includes(j?.state))||jobs.find(j=>['failed','blocked'].includes(j?.state))||{state:'completed'};
+    };
+  }else if(path==='/api/research'||research){
+    label='調査';const id=research?.[1];
+    watch=result=>deviceRequest(`/api/research/${id||result.id}`);
+    open=result=>(id||result?.id)?openResearch(id||result.id):Promise.resolve();
+  }else if(path==='/api/graph/rebuild'){
+    label='関係整理';const id=data.capture_ids?.[0];open=()=>openCapture(id);
+    watch=()=>deviceRequest(`/api/captures/${id}`).then(r=>r.graph?.job);
+  }else if(path==='/api/book/discover'){
+    label='統合探索';const isTheme=currentView?.theme;open=async result=>{await (isTheme?openTheme(data.id):openCapture(data.id));if(result)showRelated(result,{id:data.id,kind:isTheme?'theme':'capture'});};
+  }else if(path==='/api/book/integrate'){
+    label='統合';open=result=>result?.theme_id?openTheme(result.theme_id):Promise.resolve();
+  }else if(path==='/api/book/integration-proposals'||path==='/api/book/integration-proposals/execute'){
+    label=path.endsWith('/execute')?'統合':'統合探索';open=()=>home();
+  }else if(path==='/api/theme-changes'||path==='/api/concept-edits'){
+    label='整理案作成';open=result=>path==='/api/concept-edits'&&result?showConceptEdit(result):home();
+  }else return null;
+  const descriptor={label,detail:data.question||$('#app h1')?.textContent||label,open,watch,cancel,...options.aiActivity};
+  const openResult=descriptor.open;
+  descriptor.open=result=>{if(uploading)throw Error('資料の送信が終わってから開いてください。');closeDialog();return openResult(result);};
+  return descriptor;
 }
 async function refreshAiActivity(){
   if(!state||document.hidden||aiPollBusy)return;
   aiPollBusy=true;
-  try{const result=await deviceRequest('/api/ai-activity');aiRemote=Boolean(result.active);if(aiRemote)aiVisibleUntil=Math.max(aiVisibleUntil,Date.now()+1400);}
+  try{
+    const result=await deviceRequest('/api/ai-activity');aiActivity.remote(result.active?result.count||1:0);
+    await Promise.all([...aiWatches].map(async([id,task])=>{
+      try{const job=await task.watch(task.result);if(!job||aiWatches.get(id)!==task)return;
+        if(['completed','failed','blocked','canceled','superseded','waiting'].includes(job.state)){
+          aiWatches.delete(id);aiActivity.update(id,{state:job.state==='superseded'?'blocked':job.state,error:errors[job.error_code]||job.error||'',cancel:null});
+        }else aiActivity.update(id,{state:job.state==='pending'?'pending':'running'});
+      }catch{/* A polling failure is not proof that AI finished. */}
+    }));
+  }
   catch{/* Advisory only: normal requests surface connectivity errors. */}
-  finally{aiPollBusy=false;syncAiActivity();}
+  finally{aiPollBusy=false;}
 }
 async function api(path,options={}){
-  const tracked=aiRequest(path,options);
-  if(tracked){aiForeground++;aiVisibleUntil=Math.max(aiVisibleUntil,Date.now()+1400);syncAiActivity();}
-  try{return await deviceRequest(path,options);}
-  catch(error){if([401,403].includes(error.status)&&path!=='/api/login'){closeDialog();login();}throw error;}
-  finally{if(tracked){aiForeground=Math.max(0,aiForeground-1);aiVisibleUntil=Math.max(aiVisibleUntil,Date.now()+1400);syncAiActivity();setTimeout(syncAiActivity,1500);}}
+  const descriptor=aiDescriptor(path,options),taskId=descriptor?aiActivity.start(descriptor):null;
+  const {aiActivity:activityOptions,...requestOptions}=options;
+  try{
+    const result=await deviceRequest(path,requestOptions);
+    if(taskId){
+      if(result.local)aiActivity.update(taskId,{state:'offline',result});
+      else if(descriptor.watch){
+        aiWatches.set(taskId,{...descriptor,result});
+        const research=/^\/api\/research(?:\/([^/]+)\/retry)?$/.exec(path);
+        const stop=descriptor.cancel?()=>descriptor.cancel(result):research?()=>deviceRequest(`/api/research/${research[1]||result.id}/cancel`,json('POST',{})):null;
+        const cancel=stop?async()=>{await stop();aiWatches.delete(taskId);}:null;
+        aiActivity.update(taskId,{state:'pending',result,cancel});refreshAiActivity();
+      }else{
+        const failed=['failed','blocked'].includes(result.state)||result.proposals?.some(p=>p.state==='failed');
+        aiActivity.update(taskId,{state:failed?'failed':'completed',result,error:result.error||''});
+        refreshAiActivity();
+      }
+    }
+    return result;
+  }catch(error){
+    if(taskId)aiActivity.update(taskId,{state:'failed',error:error.message});
+    if([401,403].includes(error.status)&&path!=='/api/login'){aiActivity.clear();aiWatches.clear();closeDialog();login();}throw error;
+  }
 }
 
 const json = (method, data) => ({ method, headers:{ 'Content-Type':'application/json' }, body:JSON.stringify(data) });
@@ -79,7 +147,6 @@ function login() {
 
 function header(record = true, primary = true) {
   return `<header class="top"><div class="brand"><img src="/favicon.svg" alt="">Book Harvester</div><div class="top-actions">
-    <span id="ai-activity" class="ai-activity" hidden role="status" aria-label="AI処理中" title="AI処理中"><span class="ai-activity-label">AI</span><span class="ai-activity-dots" aria-hidden="true"><i></i><i></i><i></i></span></span>
     ${record ? `<button id="record" class="${primary?'primary':'quiet'}">記録する<span aria-hidden="true">＋</span></button>` : ''}
     <details class="menu"><summary aria-label="メニュー">···</summary><div class="menu-panel">
     <label><span>記録を検索</span><input id="search" type="search" placeholder="曖昧な言葉でも" value="${esc(query)}"></label>
@@ -87,7 +154,7 @@ function header(record = true, primary = true) {
     <button id="device-menu">端末の保存状況</button><button id="logout">閉じる</button></div></details></div></header>`;
 }
 function wireHeader() {
-  syncAiActivity();
+  aiActivity.mount();
   bind('#record', 'click', () => recordDialog());
   bind('#search', 'input', event => {
     query = event.target.value;
@@ -100,7 +167,7 @@ function wireHeader() {
   if($('#search-origin'))$('#search-origin').value=searchFilters.origin;for(const key of ['source','year','origin'])bind(`#search-${key}`,'input',event=>{searchFilters[key]=event.target.value;clearTimeout(searchTimer);searchTimer=setTimeout(async()=>{try{state=await api(searchPath());renderFeed();}catch(e){showNotice(e.message);}},400);});
   bind('#privacy', 'click', privacyDialog);
   bind('#device-menu','click',devicePendingDialog);
-  bind('#logout', 'click', async () => { try { const result=await api('/api/logout', json('POST', {})); await lockDevice();if(result.redirect){location.assign(result.redirect);return;}login(); } catch (e) { showNotice(e.message); } });
+  bind('#logout', 'click', async () => { try { const result=await api('/api/logout', json('POST', {})); aiActivity.clear();aiWatches.clear();await lockDevice();if(result.redirect){location.assign(result.redirect);return;}login(); } catch (e) { showNotice(e.message); } });
 }
 
 async function home() {
@@ -153,6 +220,7 @@ async function openReflection(reflectionId){
 }
 
 function modal(title, body) {
+  aiActivity.mount(document.body);
   dialog.innerHTML = `<div class="dialog-head"><h2 id="dialog-title">${esc(title)}</h2><button id="close-dialog" class="quiet" aria-label="閉じる">×</button></div>${body}`;
   if (!dialog.open) dialog.showModal();
   bind('#close-dialog', 'click', closeDialog);
@@ -573,10 +641,10 @@ async function openTheme(themeId,fromCapture=null){
  <section class="knowledge-branch">${(t.children?.length?t.children:t.materials.map(m=>({child_kind:'capture',child_id:m.capture_id,title:'記録'}))).map(m=>`<button class="capture-row" ${m.child_kind==='theme'?`data-theme="${esc(m.child_id)}"`:`data-theme-source="${esc(m.child_id)}"`}>${esc(m.title)}</button>`).join('')}</section>
  <details class="fold"><summary>その他</summary><button id="delete-question" class="danger">この問いを削除</button></details></article>`;
  document.querySelectorAll('[data-opposition-remove]').forEach(b=>b.onclick=async()=>{try{await api(`/api/themes/${encodeURIComponent(themeId)}/relationships/remove`,json('POST',{target_id:b.dataset.oppositionRemove}));await openTheme(themeId);}catch(e){showNotice(e.message);}});
- bind('#question-relations','click',async()=>{modal('関係を探す','<p id="relation-status">探索中…</p><section id="relation-candidates"></section>');try{const run=await api(`/api/themes/${encodeURIComponent(themeId)}/relationships`,json('POST',{version:t.theme.version}));if(!$('#relation-candidates'))return;$('#relation-status').textContent=run.candidates.length?'':'候補はありません';const labels={upstream:'上流',downstream:'下流',opposes:'対立'};$('#relation-candidates').innerHTML=run.candidates.map((c,i)=>`<section><p class="subtle">${labels[c.type]}${c.target_id?'':' · 新しい仮説'}</p><h3>${esc(c.question)}</h3><p>${esc(c.reason)}</p><button class="quiet" data-relation-save="${i}">採用</button></section>`).join('');document.querySelectorAll('[data-relation-save]').forEach(b=>b.onclick=async()=>{b.disabled=true;try{await api(`/api/themes/${encodeURIComponent(themeId)}/relationships/save`,json('POST',{run_id:run.id,candidate_index:Number(b.dataset.relationSave)}));b.textContent='採用済み';}catch(e){$('#relation-status').textContent=e.message;b.disabled=false;}});}catch(e){if($('#relation-status'))$('#relation-status').textContent=e.message;}});
+ bind('#question-relations','click',()=>openQuestionRelations(themeId,t.theme.version));
  bind('#drilldown','click',()=>openDrilldown(themeId,t.theme.version));
  bind('#edit-question','click' ,()=>{modal('問いを編集',`<form id="question-edit" class="field-stack"><label><span>主題</span><input id="question-title" maxlength="200" required value="${esc(t.theme.question)}"></label><label><span>内容（任意）</span><textarea id="question-content" maxlength="10000">${esc(t.theme.content||'')}</textarea></label><p id="question-edit-error" class="error"></p><button class="primary">保存</button></form>`);bind('#question-edit','submit',async e=>{e.preventDefault();e.submitter.disabled=true;try{await api(`/api/themes/${encodeURIComponent(themeId)}`,json('PATCH',{version:t.theme.version,question:$('#question-title').value,content:$('#question-content').value}));closeDialog();await openTheme(themeId,fromCapture);}catch(err){$('#question-edit-error').textContent=err.message;e.submitter.disabled=false;}});});
- bind('#delete-question','click',async event=>{if(!confirm('この問いを削除しますか？\n関連する親子・対立リンクも外れます。'))return;event.target.disabled=true;try{await api(`/api/themes/${encodeURIComponent(themeId)}`,json('DELETE',{version:t.theme.version}));showNotice('問いを削除しました。');await home();}catch(e){showNotice(e.message);event.target.disabled=false;}});
+ bind('#delete-question','click',async event=>{if(!confirm('この問いと、配下の問いをすべて削除しますか？\n他の親にもつながる子の問いも削除されます。'))return;event.target.disabled=true;try{const result=await api(`/api/themes/${encodeURIComponent(themeId)}`,json('DELETE',{version:t.theme.version}));showNotice(`配下を含めて${result.deleted_ids.length}件の問いを削除しました。`);await home();}catch(e){showNotice(e.message);event.target.disabled=false;}});
  bind('#find-related','click',async event=>{event.target.disabled=true;try{const r=await api('/api/book/discover',json('POST',{id:themeId,version:t.theme.version,idempotency_key:crypto.randomUUID()}));showRelated(r,{id:themeId,kind:'theme'});}catch(e){showNotice(e.message);}finally{event.target.disabled=false;}});
  wireHeader();wireThemeLinks();bind('#back','click',()=>home().catch(e=>showNotice(e.message)));bind('#theme-origin-back','click',()=>openCapture(fromCapture));
  document.querySelectorAll('[data-theme-source]').forEach(el=>el.onclick=async event=>{event.preventDefault();await openCapture(el.dataset.themeSource);const parent=document.createElement('button');parent.className='back';parent.textContent='← この根拠を使うテーマ';parent.onclick=()=>openTheme(themeId,currentCapture?.id);$('#back').after(parent);});
@@ -584,10 +652,24 @@ async function openTheme(themeId,fromCapture=null){
  for(const action of ['adopt','hide'])document.querySelectorAll(`[data-theme-${action}]`).forEach(el=>el.onclick=async()=>{el.disabled=true;try{await api(`/api/themes/${encodeURIComponent(themeId)}/proposals`,json('POST',{action,proposal_id:el.dataset[action==='adopt'?'themeAdopt':'themeHide']}));await openTheme(themeId);}catch(e){showNotice(e.message);el.disabled=false;}});
 }
 
-function openDrilldown(themeId,version){
- let run=null;const selected=new Set(),saved=new Map();
+async function openQuestionRelations(themeId,version,initialRun=null){
+ modal('関係を探す','<p id="relation-status">探索中…</p><section id="relation-candidates"></section>');
+ const target=$('#relation-candidates'),status=$('#relation-status');
+ try{
+  const run=initialRun||await api(`/api/themes/${encodeURIComponent(themeId)}/relationships`,{...json('POST',{version}),aiActivity:{open:result=>result?openQuestionRelations(themeId,version,result):openTheme(themeId)}});
+  if(!target.isConnected)return;
+  status.textContent=run.candidates.length?'':'候補はありません';const labels={upstream:'上流',downstream:'下流',opposes:'対立'};
+  target.innerHTML=run.candidates.map((c,i)=>`<section><p class="subtle">${labels[c.type]}${c.target_id?'':' · 新しい仮説'}</p><h3>${esc(c.question)}</h3><p>${esc(c.reason)}</p><button class="quiet" data-relation-save="${i}">採用</button></section>`).join('');
+  target.querySelectorAll('[data-relation-save]').forEach(b=>b.onclick=async()=>{b.disabled=true;try{await api(`/api/themes/${encodeURIComponent(themeId)}/relationships/save`,json('POST',{run_id:run.id,candidate_index:Number(b.dataset.relationSave)}));b.textContent='採用済み';}catch(e){status.textContent=e.message;b.disabled=false;}});
+ }catch(e){status.textContent=e.message;}
+}
+
+function openDrilldown(themeId,version,initialRun=null){
+ let run=initialRun;const selected=new Set(),saved=new Map();
  modal('深掘り',`<form id="drilldown-form"><label><span>方向（任意）</span><input id="drilldown-direction" maxlength="1000"></label><button class="primary">AIで候補を出す</button></form><p id="drilldown-error" class="error"></p><section id="drilldown-candidates"></section><form id="drilldown-manual" hidden><label><span>主題</span><input id="drilldown-title" maxlength="200" required></label><label><span>内容（任意）</span><textarea id="drilldown-content" maxlength="10000"></textarea></label><button class="quiet">候補に追加</button></form><button id="drilldown-link" class="primary" hidden>選んだ問いをつなぐ</button>`);
+ const candidates=$('#drilldown-candidates'),form=$('#drilldown-form'),error=$('#drilldown-error');
  const render=()=>{
+  if(!candidates.isConnected)return;
   $('#drilldown-candidates').innerHTML=run.candidates.map((c,i)=>`<section><label><input type="checkbox" data-drilldown-select="${i}" ${selected.has(i)?'checked':''} ${saved.has(i)?'disabled':''}> 選択</label><input aria-label="主題" data-drilldown-question="${i}" maxlength="200" value="${esc(c.question)}" ${saved.has(i)?'disabled':''}><textarea aria-label="内容" data-drilldown-content="${i}" maxlength="10000" ${saved.has(i)?'disabled':''}>${esc(c.content||'')}</textarea><select aria-label="接続先" data-drilldown-target="${i}" ${saved.has(i)?'disabled':''}><option value="selected" ${(c.target||'selected')==='selected'?'selected':''}>選択した問い</option>${(run.oppositions||[]).flatMap(o=>['opposite','both'].map(target=>`<option value="${target}:${esc(o.id)}" ${c.target===target&&c.opposite_id===o.id?'selected':''}>${target==='both'?'両方':'対立側'}：${esc(o.question)}</option>`)).join('')}</select><p class="subtle">${esc(c.origin==='user'?'手動':c.reason)}</p>${saved.has(i)?`<button class="back" data-drilldown-open="${esc(saved.get(i))}">開く</button>`:''}</section>`).join('');
   $('#drilldown-manual').hidden=false;$('#drilldown-link').hidden=false;$('#drilldown-link').disabled=![...selected].some(i=>!saved.has(i));
   document.querySelectorAll('[data-drilldown-question]').forEach(b=>b.oninput=()=>run.candidates[Number(b.dataset.drilldownQuestion)].question=b.value);
@@ -596,9 +678,10 @@ function openDrilldown(themeId,version){
   document.querySelectorAll('[data-drilldown-select]').forEach(b=>b.onchange=()=>{const i=Number(b.dataset.drilldownSelect);b.checked?selected.add(i):selected.delete(i);$('#drilldown-link').disabled=![...selected].some(i=>!saved.has(i));});
   document.querySelectorAll('[data-drilldown-open]').forEach(b=>b.onclick=()=>{closeDialog();openTheme(b.dataset.drilldownOpen);});
  };
- bind('#drilldown-form','submit',async e=>{e.preventDefault();e.submitter.disabled=true;try{run=await api(`/api/themes/${encodeURIComponent(themeId)}/drilldown`,json('POST',{version,direction:$('#drilldown-direction').value}));run.candidates.forEach((_,i)=>selected.add(i));render();$('#drilldown-form').hidden=true;}catch(err){$('#drilldown-error').textContent=err.message;e.submitter.disabled=false;}});
+ bind('#drilldown-form','submit',async e=>{e.preventDefault();e.submitter.disabled=true;try{run=await api(`/api/themes/${encodeURIComponent(themeId)}/drilldown`,{...json('POST',{version,direction:$('#drilldown-direction').value}),aiActivity:{open:result=>result?openDrilldown(themeId,version,result):openTheme(themeId)}});run.candidates.forEach((_,i)=>selected.add(i));render();form.hidden=true;}catch(err){error.textContent=err.message;e.submitter.disabled=false;}});
  bind('#drilldown-manual','submit',async e=>{e.preventDefault();e.submitter.disabled=true;try{const edits=run.candidates;run=await api(`/api/themes/${encodeURIComponent(themeId)}/drilldown/candidates`,json('POST',{run_id:run.id,question:$('#drilldown-title').value,content:$('#drilldown-content').value}));edits.forEach((c,i)=>run.candidates[i]=c);selected.add(run.candidates.length-1);e.target.reset();render();}catch(err){$('#drilldown-error').textContent=err.message;}finally{e.submitter.disabled=false;}});
  bind('#drilldown-link','click',async e=>{e.target.disabled=true;$('#drilldown-error').textContent='';try{for(const i of selected){if(saved.has(i))continue;const child=await api(`/api/themes/${encodeURIComponent(themeId)}/drilldown/save`,json('POST',{run_id:run.id,candidate_index:i,candidate:{...run.candidates[i],content:run.candidates[i].content||''}}));saved.set(i,child.id);}render();}catch(err){$('#drilldown-error').textContent=err.message;render();}});
+ if(run){run.candidates.forEach((_,i)=>selected.add(i));render();form.hidden=true;}
 }
 
 function showRelated(run,c){

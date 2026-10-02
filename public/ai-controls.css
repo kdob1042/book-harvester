@@ -1,5 +1,4 @@
-/* Replace the old, header-only advisory badge with actionable shared controls. */
-#ai-activity { display:none !important; }
+/* Standalone fallback; the app shares the native AI dock instead of duplicating it. */
 .ai-controls { position:fixed; top:max(16px,env(safe-area-inset-top)); right:16px; z-index:25; width:min(390px,calc(100vw - 32px)); padding:6px 12px; border:1px solid var(--line); border-radius:12px; background:var(--surface); color:var(--ink); box-shadow:0 4px 18px #29363014; }
 .ai-controls-in-dialog { position:sticky; top:0; right:auto; z-index:2; width:100%; max-width:100%; margin:0 0 16px; box-shadow:none; }
 .ai-control { display:flex; align-items:center; gap:9px; min-height:44px; font-size:12px; line-height:1.5; }
@@ -12,3 +11,5 @@
 @keyframes ai-control-spin { to { transform:rotate(360deg); } }
 @media(prefers-reduced-motion:no-preference) { .ai-control-spinner { animation:ai-control-spin .9s linear infinite; } }
 @media(max-width:600px) { .ai-controls:not(.ai-controls-in-dialog) { top:auto; bottom:max(16px,env(safe-area-inset-bottom)); right:16px; } }
+.ai-dock-footer { display:flex; gap:6px; align-items:center; justify-content:flex-end; }
+.ai-dock-quick-stop { min-width:44px; min-height:48px; padding:8px 12px; border:1px solid var(--line); border-radius:12px; color:var(--green); background:var(--surface); font-size:12px; }

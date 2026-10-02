@@ -4,7 +4,6 @@ import {beginOperationLease,endOperationLease,getOperation,attachRootJob,attachC
 const validId=(id:string)=>/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(id);
 type AppWorker={fetch:(request:Request,env:Env,ctx:ExecutionContext)=>Promise<Response>;queue:(batch:MessageBatch<unknown>,env:Env)=>Promise<void>;scheduled:(event:ScheduledController,env:Env)=>Promise<void>};
 // Buffer queue publication until the initiating request's job ownership is durable.
-// Unrelated jobs found by the shared dispatcher are still sent without adopting them.
 function bufferQueue(env:Env){
  const pending:{body:unknown;options?:QueueSendOptions}[]=[];
  const queue=new Proxy(env.HARVEST_QUEUE,{
@@ -25,7 +24,6 @@ export function withAIOperations(app:AppWorker){
     return reply({...await response.json<Record<string,unknown>>(),automatic_ingestion_ai:env.AI_EXECUTION_POLICY==='automatic_legacy'},response.status,response.headers);
    }
    if(!control&&(!spec||!id||spec.mode==='ingestion'&&env.AI_EXECUTION_POLICY!=='automatic_legacy'))return app.fetch(request,env,ctx);
-   // Reuse the application's own authentication checks and security headers.
    const gate=await app.fetch(new Request(new URL('/api/ai-activity',request.url),{headers:request.headers}),env,ctx);
    if(!gate.ok)return gate;
    const headers=new Headers(gate.headers);headers.delete('Content-Length');headers.set('Cache-Control','no-store');
@@ -35,7 +33,7 @@ export function withAIOperations(app:AppWorker){
     if(key&&!validId(key))return reply({error:'処理IDが不正です。'},400,headers);
     if(control[2]==='cancel'&&request.method==='POST'){
      const time=Date.now();
-     // Stop-before-start is a tombstone, not a no-op; a later start must observe it.
+     // A cancellation arriving before start must still prevent the later start.
      await env.DB.prepare("INSERT INTO ai_operations(id,path,label,mode,state,created_at,updated_at) VALUES(?,'','','inline','canceled',?,?) ON CONFLICT(id) DO UPDATE SET state='canceled',updated_at=excluded.updated_at WHERE state IN ('running','queued')").bind(key,time,time).run();
      const op=await getOperation(env,key);
      if(op?.state==='canceled')await cancelOperationJobs(env,key);
@@ -55,7 +53,7 @@ export function withAIOperations(app:AppWorker){
    const existing=(await getOperation(env,id))!;
    if(existing.path&&existing.path!==path)return reply({error:'処理IDが別の操作に使われています。'},409,headers);
    if(existing.state==='canceled'&&spec!.mode!=='ingestion')return reply({error:'AI処理を停止しました。',canceled:true,ai_operation:await operationSnapshot(env,id)},200,headers);
-   // Original ingestion is never canceled halfway through durable storage. Only its AI jobs are stopped.
+   // Preserve original ingestion; cancel only its derived AI work.
    const lease=await beginOperationLease(env,id),buffered=bufferQueue(env),pending:Promise<unknown>[]=[];
    const context=new Proxy(ctx,{get(target,key){if(key==='waitUntil')return (p:Promise<unknown>)=>{pending.push(p);};const value=Reflect.get(target,key,target);return typeof value==='function'?value.bind(target):value;}});
    const operationEnv=spec!.mode==='inline'?scopeAIOperation(buffered.env,id):buffered.env;
@@ -72,7 +70,7 @@ export function withAIOperations(app:AppWorker){
     if(response.ok&&spec!.mode!=='inline'){
      const op={...existing,id,path,mode:spec!.mode} as Operation;
      await attachRootJob(env,op,path,data,input);await attachChildJobs(env,id);await finishQueuedRegistration(env,id);
-    }else await env.DB.prepare("UPDATE ai_operations SET state=?,updated_at=? WHERE id=? AND state IN ('running','queued')").bind(response.ok?'completed':'failed',Date.now(),id).run();
+    }else await env.DB.prepare("UPDATE ai_operations SET state=?,updated_at=? WHERE id=? AND state IN ('running','queued')").bind(response.ok&&!['failed','blocked'].includes(data.state)&&!(Array.isArray(data.proposals)&&data.proposals.some((p:Record<string,unknown>)=>p.state==='failed'))?'completed':'failed',Date.now(),id).run();
     const snapshot=await operationSnapshot(env,id);
     if(snapshot?.state==='canceled'&&spec!.mode!=='ingestion')return reply({error:'AI処理を停止しました。',canceled:true,ai_operation:snapshot},200,headers);
     return reply({...data,ai_operation:snapshot},response.status,response.headers);

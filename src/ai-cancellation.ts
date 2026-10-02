@@ -12,8 +12,8 @@ export async function assertOperationActive(context:OperationContext){
 function guardedDatabase(db:D1Database,id:string):D1Database {
  const originals=new WeakMap<object,D1PreparedStatement>();
  const mutations=new WeakMap<object,boolean>();
- // Accounting is retained even if the user stops a call that was already sent.
- const guarded=(sql:string)=>!/^\s*(SELECT|PRAGMA|EXPLAIN)\b/i.test(sql)&&!/^\s*(?:INSERT(?:\s+OR\s+\w+)?\s+INTO|UPDATE)\s+(?:ai_calls|ai_daily)\b/i.test(sql);
+ // Accounting and OAuth credential rotation must survive cancellation.
+ const guarded=(sql:string)=>!/^\s*(SELECT|PRAGMA|EXPLAIN)\b/i.test(sql)&&!/^\s*(?:INSERT(?:\s+OR\s+\w+)?\s+INTO|UPDATE)\s+(?:ai_calls|ai_daily|chatgpt_sessions)\b/i.test(sql);
  const execute=async(statements:D1PreparedStatement[])=>{
   const needsFence=statements.some(s=>mutations.get(s)!==false);
   const raw=statements.map(s=>originals.get(s)||s);
@@ -45,7 +45,6 @@ function guardedDatabase(db:D1Database,id:string):D1Database {
   get(target,key){
    if(key==='prepare')return (sql:string)=>wrap(target.prepare(sql),guarded(sql));
    if(key==='batch')return execute;
-   // Avoid introducing an unguarded write path in a scoped operation.
    if(key==='exec'||key==='withSession')return ()=>{throw new Error('Use prepared statements inside an AI operation');};
    const value=Reflect.get(target,key,target);return typeof value==='function'?value.bind(target):value;
   }
@@ -64,10 +63,17 @@ export async function cancellableAI<T>(env:Env,fetcher:typeof fetch,execute:(fet
   if(!disposed&&!controller.signal.aborted)timer=setTimeout(check,1000);
  };
  timer=setTimeout(check,1000);
- const guardedFetch:typeof fetch=(input,init)=>fetcher(input,{...init,signal:AbortSignal.any([controller.signal,...(init?.signal?[init.signal]:[])])});
+ const guardedFetch:typeof fetch=async(input,init)=>{
+  // A refresh token may already have rotated at the issuer. Finish and persist
+  // that exchange; cancel the inference, not the credentials needed next time.
+  const url=new URL(input instanceof Request?input.url:String(input));
+  if(url.pathname.endsWith('/oauth/token'))return fetcher(input,init);
+  await assertOperationActive(context);
+  return fetcher(input,{...init,signal:AbortSignal.any([controller.signal,...(init?.signal?[init.signal]:[])])});
+ };
  try{
   const result=await execute(guardedFetch);
-  await assertOperationActive(context); // Also covers providers / test doubles ignoring AbortSignal.
+  await assertOperationActive(context);
   return result;
  }catch(e){await assertOperationActive(context);throw e;}
  finally{disposed=true;clearTimeout(timer);}

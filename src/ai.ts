@@ -1,7 +1,7 @@
 // One cancellation boundary covers all provider entry points, including ingestion.
 import * as provider from './ai-provider.ts';
 import {cancellableAI} from './ai-cancellation.ts';
-export {AiError} from './ai-provider.ts';
+export {AiError,responseJson} from './ai-provider.ts';
 export function call(...args:Parameters<typeof provider.call>){
  const [env,captureId,endpoint,model,payload,fetcher=fetch]=args;
  return cancellableAI(env,fetcher,f=>provider.call(env,captureId,endpoint,model,payload,f));

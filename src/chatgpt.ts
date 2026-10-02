@@ -86,10 +86,20 @@ export async function completedResponse(response:Response):Promise<any>{
  }
  if(!contentType.includes('text/event-stream')||!response.body)throw new SubscriptionError('subscription_format_'+(response.redirected?'redirect_':'')+contentType.split(';')[0].replace(/[^a-zA-Z0-9]/g,'_').slice(0,50));
  const reader=response.body.getReader(),decoder=new TextDecoder();let buffer='',bytes=0;
+ // Subscription streams can omit output from the terminal response. Keep the
+ // completed items, but release them only after response.completed succeeds.
+ const completedItems=new Map<number,any>();
  try{for(;;){const {value,done}=await reader.read();if(done)break;bytes+=value.length;if(bytes>8*1024*1024)throw new SubscriptionError('subscription_stream_too_large');buffer+=decoder.decode(value,{stream:true});buffer=buffer.replace(/\r\n/g,'\n');
   let end;while((end=buffer.indexOf('\n\n'))>=0){const frame=buffer.slice(0,end);buffer=buffer.slice(end+2);const raw=frame.split('\n').filter(x=>x.startsWith('data:')).map(x=>x.slice(5).trimStart()).join('\n');if(!raw||raw==='[DONE]')continue;let event;try{event=JSON.parse(raw);}catch{throw new SubscriptionError('subscription_invalid_event_json');}
    if(['error','response.failed','response.incomplete'].includes(event.type))throw streamError(event);
-   if(event.type==='response.completed'){if(event.response?.status!=='completed')throw streamError(event);return event.response;}
+   if(event.type==='response.output_item.done'&&Number.isInteger(event.output_index)&&event.output_index>=0&&event.item&&event.item.status!=='incomplete')completedItems.set(event.output_index,event.item);
+   if(event.type==='response.completed'){
+    if(event.response?.status!=='completed'||event.response.error)throw streamError(event);
+    const terminal=event.response,output=Array.isArray(terminal.output)?terminal.output:[];
+    const recovered=[...completedItems].sort(([a],[b])=>a-b).map(([,item])=>item);
+    if(!output.length&&recovered.length){console.info(JSON.stringify({event:'subscription_output_recovered',items:recovered.length}));return {...terminal,output:recovered};}
+    return terminal;
+   }
   }
  }throw new SubscriptionError('subscription_interrupted_stream',true);}finally{await reader.cancel().catch(()=>{});reader.releaseLock();}
 }

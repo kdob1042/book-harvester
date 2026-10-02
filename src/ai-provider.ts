@@ -9,6 +9,14 @@ export class AiError extends Error {
  constructor(code:string,retryable=false){super(code);this.code=code;this.retryable=retryable;}
 }
 type ProviderResult={status?:string;output?:{type?:string;action?:{sources?:{url?:string}[]};content?:{type:string;text?:string;annotations?:{url?:string}[]}[]}[];data?:{embedding:number[]}[];text?:string;usage?:{input_tokens?:number;prompt_tokens?:number;output_tokens?:number};used_model?:string};
+export function responseJson(data:ProviderResult):any {
+ if(data.status==='incomplete')throw new AiError('incomplete_output');
+ const blocks=(data.output||[]).flatMap(o=>o.content||[]);
+ if(blocks.some(b=>b.type==='refusal'))throw new AiError('refused');
+ const value=blocks.filter(b=>b.type==='output_text').map(b=>b.text||'').join('');
+ if(!value.trim())throw new AiError('empty_output',true);
+ try{return JSON.parse(value);}catch{throw new AiError('invalid_output');}
+}
 export async function call(env:Env,captureId:string|null,endpoint:string,model:string,payload:FormData|Record<string,unknown>,fetcher:typeof fetch=fetch):Promise<ProviderResult> {
  if(!aiConfigured(env))throw new AiError('ai_not_configured');
  if(subscriptionMode(env)&&endpoint!=='responses')throw new AiError(endpoint==='embeddings'?'subscription_embeddings_unsupported':'subscription_audio_unsupported');
@@ -28,6 +36,7 @@ export async function call(env:Env,captureId:string|null,endpoint:string,model:s
   });
   if(!session&&!response.ok){await response.body?.cancel();throw new AiError(response.status===429?'rate_limit':response.status>=500?'provider_unavailable':'provider_rejected',response.status===429||response.status>=500);}
   const data:ProviderResult=session?await completedResponse(response):await response.json<ProviderResult>();
+  if(endpoint==='responses'&&!(data.output||[]).some(o=>o.content?.some(b=>b.type==='output_text'&&b.text)))console.warn(JSON.stringify({event:'ai_output_missing',call_id:callId,model,status:data.status,output_types:(data.output||[]).map(o=>o.type),content_types:(data.output||[]).flatMap(o=>(o.content||[]).map(b=>b.type))}));
   await stmt(env,'UPDATE ai_calls SET state=?,input_tokens=?,output_tokens=? WHERE id=?','completed',data.usage?.input_tokens??data.usage?.prompt_tokens??0,data.usage?.output_tokens||0,callId).run();
   return {...data,used_model:model};
  } catch(e) {
