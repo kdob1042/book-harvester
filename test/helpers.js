@@ -1,7 +1,8 @@
 import {DatabaseSync} from 'node:sqlite';
-import {readFile} from 'node:fs/promises';
+import {readFile,readdir} from 'node:fs/promises';
 import worker from '../src/index.ts';
-import {processJob} from '../src/queue.ts';
+import {processJob,dispatch} from '../src/queue.ts';
+import {processGraphJob} from '../src/graph.ts';
 
 class Statement {
  constructor(db,sql,values=[]){this.db=db;this.sql=sql;this.values=values;}
@@ -16,7 +17,7 @@ class Statement {
 }
 
 export async function fixture({key='test-fixture-key',limit='60'}={}){
- const db=new DatabaseSync(':memory:');db.exec(await readFile(new URL('../migrations/0001_initial.sql',import.meta.url),'utf8'));
+ const db=new DatabaseSync(':memory:');for(const file of (await readdir(new URL('../migrations/',import.meta.url))).filter(x=>x.endsWith('.sql')).sort())db.exec(await readFile(new URL(`../migrations/${file}`,import.meta.url),'utf8'));
  const objects=new Map(),messages=[],pending=[];
  const env={APP_PASSWORD:'test-only-long-password',APP_ORIGIN:'http://localhost:8787',OPENAI_API_KEY:key,OPENAI_MODEL:'gpt-4.1-mini',OPENAI_TRANSCRIBE_MODEL:'gpt-4o-mini-transcribe',AI_DAILY_CALL_LIMIT:limit,AI_MAX_OUTPUT_TOKENS:'4000',
   DB:{prepare:sql=>new Statement(db,sql),async batch(statements){db.exec('BEGIN IMMEDIATE');try{const results=statements.map(s=>s.exec());db.exec('COMMIT');return results;}catch(e){db.exec('ROLLBACK');throw e;}}},
@@ -34,8 +35,8 @@ export async function fixture({key='test-fixture-key',limit='60'}={}){
  }
  async function login(){const response=await request('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:env.APP_PASSWORD})});if(response.status!==200)throw new Error('Fixture login failed');}
  async function settle(){while(pending.length)await Promise.all(pending.splice(0));}
- async function drain(fetcher=mockAi){await settle();while(messages.length){await processJob(env,messages.shift().job_id,fetcher);}}
- return {env,db,objects,messages,pending,request,login,settle,drain,worker,ctx,close:()=>db.close()};
+ async function drain(fetcher=mockAi){await settle();while(messages.length){const message=messages.shift();if(message.job_id)await processJob(env,message.job_id,fetcher);else await processGraphJob(env,message.graph_job_id,fetcher);await dispatch(env);}}
+ return {env,db,objects,messages,pending,request,login,settle,drain,worker,ctx,close:async()=>{await settle();db.close();}};
 }
 export const sentence='供給能力が追いつかないと価格が上昇する。';
 export function result(){return {
@@ -47,6 +48,7 @@ export function result(){return {
 };}
 export async function mockAi(url,options){
  if(url.endsWith('/audio/transcriptions'))return Response.json({text:sentence});
+ if(JSON.parse(options.body).text?.format?.name==='knowledge_graph_v1')return graphResponse(JSON.parse(JSON.parse(options.body).input));
  return Response.json({status:'completed',output:[{type:'message',content:[{type:'output_text',text:JSON.stringify(result())}]}],usage:{input_tokens:100,output_tokens:200}});
 }
 export const json=(method,value)=>({method,headers:{'Content-Type':'application/json'},body:JSON.stringify(value)});
@@ -60,3 +62,11 @@ export function audio(){
  const form=new FormData(),bytes=new Uint8Array(48);bytes.set(new TextEncoder().encode('RIFF'),0);bytes.set(new TextEncoder().encode('WAVE'),8);
  form.set('file',new Blob([bytes],{type:'audio/wav'}),'note.wav');return form;
 }
+
+export function graphResult(input){const h=input.current.harvest;return {
+ claim_context:h.claims.map(c=>({claim_id:c.id,speaker:null,subject:null,scope:c.conditions.join('、'),subject_period:null})),
+ concept_resolution:h.concepts.map(k=>({concept_id:k.id,existing_id:null,decision:'new',reason:'提供された意味を独立に保存する。',aliases:[]})),
+ relations:h.concepts.filter(k=>k.claim_ids.length).map((k,i)=>({id:`r${i+1}`,from_id:k.claim_ids[0],to_id:k.id,type:'about',reason:'主張を説明する概念',conditions:[],interpretation:'ai_hypothesis',evidence:[{claim_id:k.claim_ids[0],quote:h.claims.find(c=>c.id===k.claim_ids[0]).evidence.quote}]})),
+ mechanisms:[],discoveries:[],view_proposal:null,
+};}
+export function graphResponse(input,output=graphResult(input)){return Response.json({status:'completed',output:[{type:'message',content:[{type:'output_text',text:JSON.stringify(output)}]}],usage:{input_tokens:100,output_tokens:200}});}

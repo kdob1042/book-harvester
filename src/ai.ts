@@ -7,7 +7,7 @@ export class AiError extends Error {
  constructor(code:string,retryable=false){super(code);this.code=code;this.retryable=retryable;}
 }
 type ProviderResult={status?:string;output?:{content?:{type:string;text?:string}[]}[];text?:string;usage?:{input_tokens?:number;output_tokens?:number}};
-async function call(env:Env,captureId:string,endpoint:string,model:string,payload:FormData|Record<string,unknown>,fetcher:typeof fetch=fetch):Promise<ProviderResult> {
+export async function call(env:Env,captureId:string,endpoint:string,model:string,payload:FormData|Record<string,unknown>,fetcher:typeof fetch=fetch):Promise<ProviderResult> {
  if(!env.OPENAI_API_KEY)throw new AiError('ai_not_configured');
  const day=new Date().toISOString().slice(0,10),callId=id(),limit=Number(env.AI_DAILY_CALL_LIMIT);
  const count=await stmt(env,`INSERT INTO ai_daily(day,calls) VALUES(?,1)

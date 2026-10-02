@@ -26,8 +26,8 @@ test('photo -> saved job -> closed browser -> harvest -> adopt -> edit/restore -
 test('audio uses separate transcription and Responses contracts; original speech remains private',async t=>{
  const f=await fixture();t.after(f.close);await f.login();const captureId=await save(f,audio());const seen=[];
  await f.drain(async (url,opts)=>{seen.push(url);if(url.endsWith('transcriptions')){assert.ok(opts.body instanceof FormData);assert.equal(opts.body.get('model'),'gpt-4o-mini-transcribe');}
- else{const input=JSON.parse(opts.body);assert.equal(input.store,false);assert.equal(input.text.format.type,'json_schema');assert.equal(input.text.format.strict,true);assert.ok(input.input[0].content[0].text.includes(sentence));}return mockAi(url,opts);});
- assert.equal(seen.length,2);assert.ok(seen[0].endsWith('/audio/transcriptions'));assert.ok(seen[1].endsWith('/responses'));
+ else{const input=JSON.parse(opts.body);assert.equal(input.store,false);assert.equal(input.text.format.type,'json_schema');assert.equal(input.text.format.strict,true);if(input.text.format.name==='capture_harvest_v1')assert.ok(input.input[0].content[0].text.includes(sentence));else assert.ok(input.input.includes(sentence));}return mockAi(url,opts);});
+ assert.equal(seen.length,3);assert.ok(seen[0].endsWith('/audio/transcriptions'));assert.ok(seen[1].endsWith('/responses'));
  const c=await (await f.request(`/api/captures/${captureId}`)).json();assert.equal(c.job.state,'completed');assert.equal(c.assets[0].mime,'audio/wav');assert.equal(c.job.transcript.trim(),sentence);
 });
 
@@ -85,9 +85,9 @@ test('unauthenticated API/assets/export and cross-origin mutations are rejected;
  assert.equal((await f.request('/api/captures',{method:'POST',headers:{'Idempotency-Key':key(1)},body:form})).status,415);assert.equal(f.db.prepare('SELECT count(*) AS n FROM captures').get().n,0);
 });
 
-test('explicit deletion removes original objects, AI interpretations, personal views, and their histories',async t=>{
+test('source deletion removes originals and AI derivatives while adopted text/history remain',async t=>{
  const f=await fixture();t.after(f.close);await f.login();const captureId=await save(f);await f.drain();await f.request(`/api/captures/${captureId}/adopt`,json('POST',{version:1}));
  assert.equal((await f.request(`/api/captures/${captureId}`,json('DELETE',{version:1}))).status,200);
- for(const table of ['captures','assets','jobs','harvests','views','view_revisions','capture_revisions','sources'])assert.equal(f.db.prepare(`SELECT count(*) AS n FROM ${table}`).get().n,0,table);
- assert.equal(f.objects.size,0);assert.equal(f.db.prepare('SELECT calls FROM ai_daily').get().calls,1);
+ for(const table of ['captures','assets','jobs','harvests','capture_revisions','sources','graph_jobs','graph_generations','graph_nodes','concepts'])assert.equal(f.db.prepare(`SELECT count(*) AS n FROM ${table}`).get().n,0,table);
+ assert.equal(f.db.prepare('SELECT count(*) AS n FROM views').get().n,1);assert.equal(f.db.prepare('SELECT count(*) AS n FROM view_revisions').get().n,1);assert.equal(f.objects.size,0);assert.equal(f.db.prepare('SELECT calls FROM ai_daily').get().calls,2);
 });
