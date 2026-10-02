@@ -59,7 +59,7 @@ try{
  await page.getByRole('button',{name:'閉じる',exact:true}).click();
  activeAi=semanticMock;
  await page.setViewportSize({width:390,height:844});
- await page.getByRole('button',{name:'記録する'}).click();await page.locator('#capture-mode').selectOption('text');await page.locator('#capture-text').fill(a);await page.getByRole('button',{name:'残す',exact:true}).click();
+ await page.getByRole('button',{name:'記録する'}).click();await page.locator('#capture-mode').selectOption('text');await page.locator('#capture-text').fill(a);await page.locator('#capture-source').fill('本A');await page.getByRole('button',{name:'残す',exact:true}).click();
  await page.getByRole('button',{name:new RegExp(a)}).click();await page.getByRole('button',{name:'自分の見方にする',exact:true}).click();await page.getByRole('button',{name:'← 残したもの'}).click();
  await page.getByRole('button',{name:'記録する'}).click();await page.locator('#capture-mode').selectOption('audio');
  const wav=Buffer.alloc(48);wav.write('RIFF',0);wav.write('WAVE',8);
@@ -70,7 +70,7 @@ try{
  if(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth))throw Error('Cross-book mobile overflow');
  await page.screenshot({path:'test-results/mobile-cross-book.png',fullPage:true});
  await page.getByText('両側の根拠と違いを読む',{exact:true}).click();await page.getByText('変更する箇所と理由を読む',{exact:true}).click();
- await expect(page.getByRole('link',{name:'本A · p.1の原資料'})).toBeVisible();await expect(page.getByRole('link',{name:'本B · p.1の原資料'})).toBeVisible();
+ await expect(page.getByRole('link',{name:'本Aの原資料'})).toBeVisible();await expect(page.getByRole('link',{name:'本B · p.1の原資料'})).toBeVisible();
  await page.setViewportSize({width:1280,height:900});await page.screenshot({path:'test-results/desktop-cross-book.png',fullPage:true});
  await page.getByRole('button',{name:'この接続を表示しない',exact:true}).click();
  await expect(page.getByText('過去との接続 · AIの比較',{exact:true})).not.toBeVisible();
