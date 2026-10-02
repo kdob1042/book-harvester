@@ -25,7 +25,7 @@ try{
  await mkdir('test-results',{recursive:true});
  const page=await browser.newPage({viewport:{width:390,height:844}});
  page.on('pageerror',e=>browserErrors.push(e.message));
- await page.goto(f.env.APP_ORIGIN);await page.getByLabel('パスワード',{exact:true}).fill(f.env.APP_PASSWORD);await page.getByRole('button',{name:'開く',exact:true}).click();
+ await page.addLocatorHandler(page.locator('.ai-confirmation'),async()=>{await page.getByRole('button',{name:'はい、実行する',exact:true}).click();});await page.goto(f.env.APP_ORIGIN);await page.getByLabel('パスワード',{exact:true}).fill(f.env.APP_PASSWORD);await page.getByRole('button',{name:'開く',exact:true}).click();
  await expect(page.getByRole('button',{name:'記録する'})).toBeVisible();
  await expect.poll(()=>page.locator('.brand img').evaluate(el=>el.complete&&el.naturalWidth>0)).toBe(true);
  await expect(page.locator('.primary:visible')).toHaveCount(1);
