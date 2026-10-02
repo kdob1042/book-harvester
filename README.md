@@ -148,3 +148,18 @@ Harvestの成功と同じD1バッチで横断整理ジョブを登録する。�
 分類・生成開始・全件承認は不要。本人の見方は明示採用時だけ変わる。
 既存Harvestは0009の移行ジョブから自動接続する。原画像・音声の再読解は行わない。
 処理状況・停止/再開・上限・検証範囲は [テーマ機能の検証記録](docs/theme-verification.md) を参照。
+
+## Book-only remote MCP (Issue #20)
+
+Endpoint: `https://book-harvester-mcp.mashstock.workers.dev/mcp`.
+Connect as an OAuth remote MCP in ChatGPT. The authorization page uses Cloudflare Access, permits only the configured owner, displays the requesting client and callback hostname, and uses browser-bound, single-use consent. No API key or AI provider credential is given to ChatGPT. Protocol discovery and 401 challenges are outside the Access HTML login gate; `/authorize` alone has the Access owner policy.
+
+The MCP Worker lives in this repository and calls the named private `BookService` entrypoint of the existing Web Worker. It reuses Web validation, versions, records and ingestion/research jobs. `book:read`, `book:write`, and `book:manage` are enforced per tool. Record save explicitly clears inherited source for independent notes; searches use all-history SQL and bounded cursor pages, without AI. Delete requires an expiring owner/record/version-bound preview confirmation. Existing deletion also removes capture-owned user views and revisions; it does not retain them.
+
+Implemented: record save/search/read/correction, saved graph read, user-view adoption/read/edit, ingestion and research status/retry, explicit external research/cancel, delete preview/delete, domains/themes/context/history/scope correction, migration status/pause/resume/retry. Theme operations use the #15–#19 implementation, not a parallel database. Web and MCP authorization are separate from AI authentication and usage mode.
+
+Remaining Issue #20 work: attachment file-input transfer, theme-owned conversation drafts and integration, concept/theme merge/split/undo adapters, visibility adapters, full multi-entity search and paginated export, authenticated ChatGPT end-to-end connection and real-AI quality evaluation. These are not reported as completed capabilities. Current ingestion still uses the existing automatic backend pipeline; the newer user-directed integration policy is a separate pending backend/UI change and must not be described as already enforced.
+
+Validation: TypeScript, 64 Node tests (including MCP shared storage/source/idempotency/theme tests), Web/MCP dry-run builds; production discovery returns OAuth metadata, `/mcp` returns 401 with resource metadata, and `/authorize` redirects to owner-restricted Cloudflare Access. Real user OAuth consent and ChatGPT tools/call remain unverified until the connection is authorized.
+
+Build/deploy: `npm run build`; `npx wrangler deploy --config wrangler.mcp.jsonc`. Deploy Web first (named `BookService` export), then MCP. Production deploy must retain the current Web assets and all existing bindings/secrets, including the ChatGPT session. Each environment requires its own OAuth KV, canonical resource URL, Access audience, and Book service binding; the checked-in MCP configuration is production only.

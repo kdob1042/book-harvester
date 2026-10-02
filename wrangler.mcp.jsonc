@@ -1,0 +1,13 @@
+{
+ "$schema":"./node_modules/wrangler/config-schema.json",
+ "name":"book-harvester-mcp",
+ "main":"src/mcp.ts",
+ "account_id":"81561b1cc51a5329d489840ab20f0ca6",
+ "compatibility_date":"2026-10-01",
+ "compatibility_flags":["nodejs_compat"],
+ "workers_dev":true,
+ "preview_urls":false,
+ "vars":{"MCP_ORIGIN":"https://book-harvester-mcp.mashstock.workers.dev","ACCESS_EMAIL":"kdob1042@gmail.com","ACCESS_TEAM_DOMAIN":"https://kdob1042.cloudflareaccess.com","ACCESS_AUD":"4b2dd601e2ffa4af7610c0f809fbd6eb2d3987539558a3781bac8c197b30582c"},
+ "services":[{"binding":"BOOK","service":"book-harvester","entrypoint":"BookService"}],
+ "kv_namespaces":[{"binding":"OAUTH_KV","id":"8a5d4be34943405eb5dd9cbf876e5c6c"}]
+}

@@ -1,0 +1,41 @@
+import {route} from './index.ts';
+import {rows,stmt,fail,digest} from './core.ts';
+import {toolSpecs} from './mcp-tools.ts';
+export async function callBook(env:Env,ctx:ExecutionContext,name:string,a:Record<string,unknown>) {
+  if(!toolSpecs.some(s=>s[0]===name))fail(404,'unknown_tool');
+  if(name==='get_status')return {capabilities:{records:true,views:true,research:true,themes:true,attachments:false},ai_policy:'ingestion_and_explicit_actions',jobs:await rows(env,'SELECT state,count(*) AS count FROM jobs GROUP BY state')};
+  if(name==='search_records'){
+   const q=String(a.query||'').slice(0,200).replace(/[\\%_]/g,'\\$&'),limit=Number(a.limit||20),offset=Number(a.cursor||0);
+   if(!Number.isInteger(limit)||limit<1||limit>50||!Number.isInteger(offset)||offset<0)fail(400,'invalid_pagination');
+   const found=await rows(env,`SELECT c.id,c.version,c.kind,c.created_at,substr(c.original_text,1,500) AS preview,s.title AS source_title FROM captures c LEFT JOIN sources s ON c.source_id=s.id LEFT JOIN harvests h ON h.capture_id=c.id AND h.version=c.version WHERE c.original_text LIKE ? ESCAPE '\\' OR c.note LIKE ? ESCAPE '\\' OR h.result LIKE ? ESCAPE '\\' OR s.title LIKE ? ESCAPE '\\' ORDER BY c.created_at DESC,c.id DESC LIMIT ? OFFSET ?`,...Array(4).fill(`%${q}%`),limit+1,offset);
+   return {records:found.slice(0,limit),next_cursor:found.length>limit?offset+limit:null,search_scope:'all_history',method:'sql_literal',ai_called:false};
+  }
+  const rid=String(a.id||'');if(a.id&&!['get_theme','get_theme_context','get_history','revise_theme','correct_membership','adopt_theme_view'].includes(name)&&!/^[a-f0-9-]{36}$/.test(rid))fail(400,'invalid_id');
+  let path='',method='GET';const body={...a};delete body.id;delete body.idempotency_key;delete body.kind;
+  switch(name){
+   case 'get_domains':path='/api/themes';break;
+   case 'get_theme':case 'get_theme_context':path=`/api/themes/${encodeURIComponent(rid)}`;break;
+   case 'get_history':path=`/api/themes/${encodeURIComponent(rid)}/history`;break;
+   case 'revise_theme':path=`/api/themes/${encodeURIComponent(rid)}`;method='PATCH';break;
+   case 'correct_membership':path=`/api/themes/${encodeURIComponent(rid)}/overrides`;method='POST';break;
+   case 'adopt_theme_view':path=`/api/themes/${encodeURIComponent(rid)}/proposals`;method='POST';break;
+   case 'get_migration_status':path='/api/themes/migration';break;
+   case 'manage_migration':path='/api/themes/migration';method='POST';break;
+   case 'get_record':path=`/api/captures/${rid}`;break;
+   case 'save_capture':path='/api/captures';method='POST';body.source=String(a.source||'');break;
+   case 'revise_capture':path=`/api/captures/${rid}`;method='PATCH';break;
+   case 'adopt_view':path=`/api/captures/${rid}/adopt`;method='POST';break;
+   case 'get_view':path=`/api/views/${rid}`;break;
+   case 'revise_view':path=`/api/views/${rid}`;method='PATCH';break;
+   case 'get_relations':path=`/api/graph/neighborhood?capture_id=${rid}`;break;
+   case 'get_job':path=a.kind==='research'?`/api/research/${rid}`:`/api/captures/${rid}`;break;
+   case 'retry_job':path=a.kind==='research'?`/api/research/${rid}/retry`:`/api/captures/${rid}/retry`;method='POST';break;
+   case 'start_research':path='/api/research';method='POST';break;
+   case 'cancel_job':path=`/api/research/${rid}/cancel`;method='POST';break;
+   case 'delete_capture':path=`/api/captures/${rid}`;method='DELETE';break;
+   default:fail(400,'unsupported_operation');
+  }
+  const key=String(a.idempotency_key||'');const hex=await digest(`${name}:${key}`),op=`${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20,32)}`;
+  const request=new Request(new URL(path,env.APP_ORIGIN),{method,headers:{Origin:env.APP_ORIGIN,'Content-Type':'application/json','idempotency-key':key,'x-operation-id':op},...method!=='GET'?{body:JSON.stringify(body)}:{}});
+  const response=await route(request,env,ctx,true);const data=await response.json();return {status:response.status,data,url:env.APP_ORIGIN};
+ }

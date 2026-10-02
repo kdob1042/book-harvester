@@ -217,9 +217,9 @@ function exportData(env:Env){
  return new Response(stream,{headers:{'Content-Type':'application/json; charset=utf-8','Content-Disposition':'attachment; filename="book-harvester-export.json"'}});
 }
 
-async function route(request:Request,env:Env,ctx:ExecutionContext){
+export async function route(request:Request,env:Env,ctx:ExecutionContext,trustedService=false){
  const url=new URL(request.url),path=url.pathname,method=request.method;
- if(env.ACCESS_AUD&&!await accessAuthorized(env,ctx,request))fail(403,'Cloudflareで本人のアカウントにログインしてください。');
+ if(!trustedService&&env.ACCESS_AUD&&!await accessAuthorized(env,ctx,request))fail(403,'Cloudflareで本人のアカウントにログインしてください。');
  if(!['GET','HEAD'].includes(method)&&request.headers.get('origin')!==env.APP_ORIGIN)fail(403,'この画面から操作し直してください。');
  if(path==='/healthz'&&method==='GET')return json({ok:true});
  if(path==='/api/login'&&method==='POST'){
@@ -228,7 +228,7 @@ async function route(request:Request,env:Env,ctx:ExecutionContext){
   return json(result.status===200?{ok:true}:{error:result.error},result.status,result.cookie?{'Set-Cookie':result.cookie}:{});
  }
  if(!path.startsWith('/api/'))return env.ASSETS.fetch(request);
- if(!env.ACCESS_AUD&&!await loggedIn(request,env))fail(401,'ログインしてください。');
+ if(!trustedService&&!env.ACCESS_AUD&&!await loggedIn(request,env))fail(401,'ログインしてください。');
  const replay=await replayReceipt(env,request);if(replay)return json(replay);
  if(path==='/api/themes/migration'&&method==='GET')return json(await themeMigrationStatus(env));
  if(path==='/api/themes/migration'&&method==='POST'){const r=await manageThemeMigration(env,await jsonBody(request.clone()));ctx.waitUntil(dispatch(env));return json(r);}
@@ -359,3 +359,4 @@ export default {
  async scheduled(_event,env){await dispatch(env);await cleanup(env);},
  async queue(batch,env){await consume(batch,env);},
 } satisfies ExportedHandler<Env>;
+

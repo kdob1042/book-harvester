@@ -10,3 +10,4 @@ test-results/
 *.backup
 dist-connector/
 src/connector.generated.ts
+dist-mcp/
