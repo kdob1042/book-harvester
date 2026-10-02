@@ -14,8 +14,8 @@ const errors = {
   subscription_reauth_required:'原資料は保存済みです。パソコンから ChatGPT に再接続してください。',
   subscription_sharing_usage_limit_exceeded:'原資料は保存済みです。サブスク枠の回復後に再試行します。',
   subscription_audio_unsupported:'音声は保存済みです。サブスク枠では文字起こしできません。文章の記録から知見化できます。',
-  ai_not_configured:'原資料は保存済みです。AI設定後に自動で読み取ります。',
-  daily_limit:'原資料は保存済みです。今日の解析上限に達しました。明日、自動で続けます。',
+  ai_not_configured:'原資料は保存済みです。AI設定後に「AIで抽出」を実行してください。',
+  daily_limit:'原資料は保存済みです。今日の解析上限に達しました。枠の回復後に再実行してください。',
   invalid_output:'読み取り結果を確認できませんでした。原資料は残っています。',
   empty_transcript:'音声を読み取れませんでした。原音声は残っています。',
   refused:'この資料は解析できませんでした。原資料は残っています。',
@@ -32,7 +32,7 @@ function showNotice(text) {
 const aiRequest = (path,options={}) => {
   const method=(options.method||'GET').toUpperCase();
   if(method==='GET')return false;
-  return path==='/api/captures'||/\/assets$/.test(path)||/\/retry$/.test(path)||/\/ask$/.test(path)||path.startsWith('/api/book/integration-proposals')||path==='/api/book/discover'||path==='/api/book/integrate'||/^\/api\/themes\/[^/]+\/rebuild$/.test(path)||path==='/api/research'||path==='/api/theme-changes'||path==='/api/concept-edits';
+  return /\/analyze$/.test(path)||/\/retry$/.test(path)||/\/ask$/.test(path)||path.startsWith('/api/book/integration-proposals')||path==='/api/book/discover'||path==='/api/book/integrate'||/^\/api\/themes\/[^/]+\/rebuild$/.test(path)||path==='/api/research'||path==='/api/theme-changes'||path==='/api/concept-edits';
 };
 function syncAiActivity(){
   const indicator=$('#ai-activity');if(!indicator)return;
@@ -286,8 +286,9 @@ function renderCapture() {
   app.innerHTML = `${header(false)}<button id="back" class="back">← 残したもの</button>
     <article><div class="detail-head"><p class="eyebrow">${source}${c.source_inherited ? '（前回の本から引き継ぎ）' : ''}${sourceLocator} · ${date(c.created_at)}</p>
     <h1>${esc(h?.summary || '原資料を残しました。')}</h1>${label ? `<p class="status ${esc(c.job?.state)}">${esc(label)}</p>` : ''}
-    ${c.pending_edit?'<p class="subtle">端末の訂正は未送信です。知見は保存先の前の版を表示しています。</p>':''}${c.from_cache?'<p class="subtle">端末に残した資料です。接続時に更新します。</p>':''}${c.local_only?`<p class="subtle">${c.local_conflict?'端末の原資料は残っています。保存状況から失敗内容を確認できます。':'端末の原資料を保存しました。接続後に自動送信・知見化します。'}</p>${c.local_error?`<p class="error">${esc(c.local_error)}</p>`:''}`:''}
+    ${c.pending_edit?'<p class="subtle">端末の訂正は未送信です。知見は保存先の前の版を表示しています。</p>':''}${c.from_cache?'<p class="subtle">端末に残した資料です。接続時に更新します。</p>':''}${c.local_only?`<p class="subtle">${c.local_conflict?'端末の原資料は残っています。保存状況から失敗内容を確認できます。':'端末の原資料を保存しました。接続後に自動送信します。AI抽出は実行しません。'}</p>${c.local_error?`<p class="error">${esc(c.local_error)}</p>`:''}`:''}
     ${['failed','blocked'].includes(c.job?.state) ? `<p class="subtle">${esc(errors[c.job.error_code] || '原資料は残っています。詳細から再試行できます。')}</p>` : ''}</div>
+    ${!h&&!c.local_only?'<section class="detail-section"><button id="analyze" class="primary">AIで抽出</button><p class="subtle">押したときだけ、この原資料をAIへ送って知見・問いを抽出します。</p></section>':''}
     ${c.themes?.length?`<section class="detail-section"><p class="section-label">この記録が育てる問い</p>${c.themes.map(t=>`<a href="#" data-theme="${esc(t.id)}">${esc(t.question)}</a>`).join('<br>')}</section>`:''}
     ${h?'<section class="detail-section"><button id="find-related" class="primary">関連を探す</button><div id="related-candidates"></div></section>':''}
     ${h?'<details class="fold"><summary>周辺のつながりを読む・概念を整理する</summary><button id="open-neighborhood" class="quiet">この知見の周辺を開く</button></details>':''}
@@ -313,6 +314,7 @@ function renderCapture() {
     <details class="fold"><summary>訂正・補足など</summary><div class="secondary-links"><button id="correct">読み取り・出典を訂正</button><button id="supplement">写真・音声を補足</button>
       ${h ? '<button id="ask">この資料について聞く</button><button id="hide-revisit">再訪候補に表示しない</button>' : ''}${['failed','blocked'].includes(c.job?.state) ? '<button id="retry">読み取りを再試行</button>' : ''}<button id="delete" class="danger">この記録を削除</button></div></details></article>`;
   wireHeader(); wireThemeLinks(); bind('#back', 'click', () => home().catch(e => showNotice(e.message)));
+  bind('#analyze','click',async event=>{event.target.disabled=true;try{await api(`/api/captures/${c.id}/analyze`,json('POST',{version:c.version}));await openCapture(c.id);}catch(e){showNotice(e.message);event.target.disabled=false;}});
   bind('#find-related','click',async event=>{event.target.disabled=true;try{const r=await api('/api/book/discover',json('POST',{id:c.id,version:c.version,idempotency_key:crypto.randomUUID()}));showRelated(r,c);}catch(e){showNotice(e.message);}finally{event.target.disabled=false;}});
   if(h)api(`/api/book/discovery?anchor=${encodeURIComponent(c.id)}`).then(r=>{if(currentCapture?.id===c.id&&r)showRelated(r,c);}).catch(()=>{});
   bind('#adopt', 'click', async event => {
@@ -413,10 +415,10 @@ function notifyReflection(reflections){
 }
 function privacyDialog() {
   modal('AIと保存について', `<div class="privacy"><p>残した写真・音声・文章は、このアプリの非公開データとして保存します。</p>
-    <p>解析には、対象の原資料、自分の一言、前回の書名だけをOpenAIへ送ります。横断接続には、過去の関連候補を最大12記録・120ノードと、現行の見方を最大6件送ります。通常保存は読み取りまでです。関連探索とテーマの理解の更新は、ボタンで依頼した時だけ実行します。</p>
+    <p>解析には、対象の原資料、自分の一言、前回の書名だけをOpenAIへ送ります。横断接続には、過去の関連候補を最大12記録・120ノードと、現行の見方を最大6件送ります。通常保存ではAIを実行しません。知見・問いの抽出、関連探索、テーマの理解の更新は、それぞれボタンで依頼した時だけ実行します。</p>
     <p>AIが作るのは知見と見方の案です。「自分の見方にする」を選んだ文章だけが、本人の見方として残ります。</p>
     <p class="subtle">${state?.ai_configured ? 'AI解析は設定済みです。' : 'AI解析は未設定です。原資料を保存して待ちます。'}<br>今日の呼び出し ${state?.usage.calls || 0} / ${state?.daily_limit || '—'}（UTC日次）。写真・文章は読み取りと横断整理で通常2回、${state?.ai?.mode==='chatgpt'?'音声は原資料の保存のみ。':'音声は文字起こしを含めて通常3回。'}<br>${state?.ai?.mode==='chatgpt' ? 'AI解析は ChatGPT のサブスク枠のみを使います。有料APIへの自動切り替えはありません。音声文字起こしと意味索引は使わず、検索は語句検索です。接続状態：'+esc(state.ai.state)+ '。' : '解析と意味索引は有料APIを使います。上限は呼び出し数です。'}</p>
-    <p class="subtle">保存した記録と採用履歴から、区切り・日・週の振り返りを自動で整理します。最大20記録・10改訂をAI処理へ送ります。</p>
+    <p class="subtle">区切り・日・週の振り返りも自動実行しません。AI処理は明示的に依頼した操作だけで実行します。</p>
     ${state?.ai?.mode==='chatgpt'?'<p>ChatGPT の接続はパソコンから設定できます。上限や接続切れの間は原資料を保存して待ちます。</p><button id="chatgpt-disconnect" class="quiet danger">ChatGPT 接続を解除</button>':''}<details class="fold"><summary>振り返りの通知</summary><p class="subtle">このアプリを開いている間の通知です。既定はオフ。本文が端末の通知に表示されます。</p><label><input id="reflection-notifications" type="checkbox"> 通知を使う</label><p id="notification-error" class="error" role="alert"></p></details>
     <details class="fold"><summary>端末の保存とオフライン</summary><p>最近20記録・10件の見方と、取得できた原資料を自動で端末に残します。読書キャッシュは最大20MB、未送信の原資料は別枠で最大50MBです。端末側の保存領域が削除されると未送信データを失うため、接続時の同期または書き出しで残せます。</p><label><span>最近の記録を残す件数</span><select id="device-record-count"><option>5</option><option selected>20</option><option>50</option></select></label><label><span>読書キャッシュの容量（MB）</span><select id="device-cache-mb"><option>5</option><option selected>20</option><option>40</option></select></label><label><span>未送信原資料の容量（MB）</span><select id="device-outbox-mb"><option>20</option><option selected>50</option></select></label><p class="subtle">設定を減らしても、未送信の原資料は自動で削除しません。</p><button id="device-status" class="quiet">未送信・競合を見る</button><button id="device-clear-cache" class="quiet">読書キャッシュだけ削除</button><button id="device-export" class="quiet">未送信の原資料を書き出す</button><button id="device-discard" class="quiet danger">未送信の原資料をすべて削除</button><p id="device-error" class="error"></p></details><p class="subtle">削除は記録の詳細から。書き出しには元ファイルと履歴も含みます。</p></div>`);
   bind('#chatgpt-disconnect','click',async()=>{try{await api('/api/ai/disconnect',{method:'POST'});state.ai.state='disconnected';state.ai_configured=false;closeDialog();showNotice('ChatGPT 接続を解除しました。');}catch(e){showNotice(e.message);}});
