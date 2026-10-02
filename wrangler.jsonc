@@ -18,7 +18,9 @@
     "OPENAI_MODEL": "gpt-4.1-mini",
     "OPENAI_TRANSCRIBE_MODEL": "gpt-4o-mini-transcribe",
     "AI_DAILY_CALL_LIMIT": "60",
-    "AI_MAX_OUTPUT_TOKENS": "4000"
+    "AI_MAX_OUTPUT_TOKENS": "4000",
+    "RESEARCH_ALLOWED_HOSTS": "",
+    "OPENAI_RESEARCH_MODEL": "gpt-4.1-mini"
   },
   "d1_databases": [
     {
@@ -68,7 +70,9 @@
         "OPENAI_MODEL": "gpt-4.1-mini",
         "OPENAI_TRANSCRIBE_MODEL": "gpt-4o-mini-transcribe",
         "AI_DAILY_CALL_LIMIT": "60",
-        "AI_MAX_OUTPUT_TOKENS": "4000"
+        "AI_MAX_OUTPUT_TOKENS": "4000",
+        "RESEARCH_ALLOWED_HOSTS": "",
+        "OPENAI_RESEARCH_MODEL": "gpt-4.1-mini"
       },
       "d1_databases": [
         {

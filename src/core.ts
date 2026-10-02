@@ -12,6 +12,7 @@ export type Capture = {
  id:string; version:number; kind:string; original_text:string; corrected_text:string|null; note:string;
  source_id:string|null; source_title:string|null; source_certainty:string|null; source_published_at:string|null; source_subject_period:string|null; source_inherited:number; source_locked:number;
  page:string|null; chapter:string|null; locator_certainty:string; created_at:number; updated_at:number;
+ import_origin?:string|null;source_locator?:string|null;source_bibliography?:string|null;
 };
 export type Asset = { id:string; capture_id:string; object_key:string; name:string; mime:string; size:number; created_at:number };
 export type Job = { id:string; capture_id:string; version:number; state:string; attempts:number; available_at:number; dispatched_at:number|null; lease_token:string|null; transcript:string|null; error_code:string|null };
@@ -36,7 +37,7 @@ export async function rows<T>(env:Env, sql:string, ...values:(string|number|null
  return (await stmt(env,sql,...values).all<T>()).results;
 }
 export async function getCapture(env:Env, captureId:string) {
- const capture=await stmt(env,`SELECT c.*,s.title AS source_title,s.certainty AS source_certainty,s.published_at AS source_published_at,s.subject_period AS source_subject_period FROM captures c LEFT JOIN sources s ON s.id=c.source_id WHERE c.id=?`,captureId).first<Capture>();
+ const capture=await stmt(env,`SELECT c.*,s.title AS source_title,s.certainty AS source_certainty,s.published_at AS source_published_at,s.subject_period AS source_subject_period,s.bibliography_json AS source_bibliography FROM captures c LEFT JOIN sources s ON s.id=c.source_id WHERE c.id=?`,captureId).first<Capture>();
  if (!capture) return null;
  const [job,h,assets,views]=await Promise.all([
   stmt(env,'SELECT * FROM jobs WHERE capture_id=? AND version=?',captureId,capture.version).first<Job>(),

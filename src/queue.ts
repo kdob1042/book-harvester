@@ -1,6 +1,11 @@
+import {scheduleEmbedding,dispatchEmbeddings,processEmbedding} from './semantic.ts';
+import {dispatchResearch,processResearch} from './research.ts';
 import {stmt,rows,getCapture,now,id,type Job,type QueueBody} from './core.ts';
 import {transcribe,harvest,AiError} from './ai.ts';
 import {graphJobStatement,dispatchGraph,processGraphJob} from './graph.ts';
+import {dispatchReflections,processReflection,scheduleReflections} from './reflections.ts';
+import {dispatchImports,processImport} from './imports.ts';
+import {dispatchBibliography,processBibliography,scheduleBibliography} from './bibliography.ts';
 
 export async function dispatch(env:Env) {
  const time=now();
@@ -15,7 +20,12 @@ export async function dispatch(env:Env) {
   try{await env.HARVEST_QUEUE.send({job_id:job.id},{contentType:'json'});}
   catch{await stmt(env,"UPDATE jobs SET dispatched_at=NULL WHERE id=? AND state='pending'",job.id).run();}
  }
+ await dispatchEmbeddings(env);
  await dispatchGraph(env);
+ await dispatchReflections(env);
+ await dispatchImports(env);
+ await dispatchBibliography(env);
+ await dispatchResearch(env);
 }
 
 export async function processJob(env:Env,jobId:string,fetcher?:typeof fetch) {
@@ -53,6 +63,10 @@ export async function processJob(env:Env,jobId:string,fetcher?:typeof fetch) {
   statements.push(stmt(env,`UPDATE jobs SET state=CASE WHEN version=(SELECT version FROM captures WHERE id=?) THEN 'completed' ELSE 'superseded' END,
    error_code=NULL,input_tokens=?,output_tokens=?,finished_at=?,lease_token=NULL WHERE id=? AND state='running' AND lease_token=?`,capture.id,output.usage.input_tokens||0,output.usage.output_tokens||0,now(),job.id,token));
   await env.DB.batch(statements);
+  await scheduleReflections(env,capture.id);
+  await scheduleBibliography(env,capture.id,job.version);
+  await scheduleEmbedding(env,capture.id,job.version);
+  await dispatchEmbeddings(env);
   await dispatchGraph(env);
  }catch(e){
   const safe=e instanceof AiError?e:new AiError('processing_failed'),blocked=['ai_not_configured','daily_limit'].includes(safe.code);
@@ -64,7 +78,7 @@ export async function processJob(env:Env,jobId:string,fetcher?:typeof fetch) {
 }
 
 export async function cleanup(env:Env){
- const staged=await rows<{object_key:string}>(env,`SELECT s.object_key FROM staged_uploads s LEFT JOIN assets a ON a.object_key=s.object_key WHERE a.id IS NULL AND s.created_at<? LIMIT 50`,now()-86400000);
+ const staged=await rows<{object_key:string}>(env,`SELECT s.object_key FROM staged_uploads s LEFT JOIN assets a ON a.object_key=s.object_key WHERE a.id IS NULL AND NOT EXISTS(SELECT 1 FROM import_jobs WHERE object_key=s.object_key) AND NOT EXISTS(SELECT 1 FROM import_items WHERE object_key=s.object_key) AND s.created_at<? LIMIT 50`,now()-86400000);
  const deleted=await rows<{object_key:string}>(env,'SELECT object_key FROM object_deletions LIMIT 50');
  for(const {object_key:key} of [...staged,...deleted]){
   await env.ORIGINALS.delete(key);
@@ -79,6 +93,11 @@ export async function consume(batch:MessageBatch<unknown>,env:Env){
    const body=message.body;
    if(body&&typeof body==='object'&&'job_id' in body&&typeof body.job_id==='string')await processJob(env,body.job_id);
    if(body&&typeof body==='object'&&'graph_job_id' in body&&typeof body.graph_job_id==='string')await processGraphJob(env,body.graph_job_id);
+   if(body&&typeof body==='object'&&'reflection_job_id' in body&&typeof body.reflection_job_id==='string')await processReflection(env,body.reflection_job_id);
+   if(body&&typeof body==='object'&&'import_job_id' in body&&typeof body.import_job_id==='string')await processImport(env,body.import_job_id);
+   if(body&&typeof body==='object'&&'bibliography_capture_id' in body&&typeof body.bibliography_capture_id==='string')await processBibliography(env,body.bibliography_capture_id);
+   if(body&&typeof body==='object'&&'research_id' in body&&typeof body.research_id==='string')await processResearch(env,body.research_id);
+   if(body&&typeof body==='object'&&'embedding_capture_id' in body&&typeof body.embedding_capture_id==='string')await processEmbedding(env,body.embedding_capture_id);
    message.ack();
   }
   catch{message.retry({delaySeconds:60});}
