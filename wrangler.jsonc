@@ -66,7 +66,7 @@
     "production": {
       "name": "book-harvester",
       "vars": {
-        "APP_ORIGIN": "https://book-harvester.invalid",
+        "APP_ORIGIN": "https://book-harvester.mashstock.workers.dev",
         "OPENAI_MODEL": "gpt-4.1-mini",
         "OPENAI_TRANSCRIBE_MODEL": "gpt-4o-mini-transcribe",
         "AI_DAILY_CALL_LIMIT": "60",
@@ -78,7 +78,7 @@
         {
           "binding": "DB",
           "database_name": "book-harvester",
-          "database_id": "00000000-0000-0000-0000-000000000002",
+          "database_id": "78d5b0cf-3c0d-4cdf-8784-abeafc3331f3",
           "migrations_dir": "migrations"
         }
       ],
@@ -111,5 +111,6 @@
         ]
       }
     }
-  }
+  },
+  "account_id": "81561b1cc51a5329d489840ab20f0ca6"
 }
