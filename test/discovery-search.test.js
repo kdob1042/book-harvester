@@ -86,3 +86,19 @@ test('empty AI search plan yields no candidates instead of falling back to class
  });
  assert.deepEqual(found.candidates,[]);
 });
+
+
+test('legacy mode skips AI search planning, preserves legacy retrieval, and replays without AI', async t => {
+ const f=await fixture();t.after(f.close);insert(f,'legacy-hit','専門性の価値は仕事で変わる');let calls=0;
+ const args={id:'theme:work',version:1,search_mode:'legacy',idempotency_key:'legacy-mode'};
+ const run=await discoverRecords(f.env,args,async(_,options)=>{
+  calls++;const p=JSON.parse(options.body),input=JSON.parse(p.input);
+  assert.equal(p.text.format.name,'related_discovery_v1');
+  assert.equal(input.selection.search_mode,'legacy');
+  assert.ok(input.candidates.some(c=>c.id==='legacy-hit'));
+  return graphResponse({},{candidates:[{id:'legacy-hit',reason:'職種と専門性の条件を比較',relation:'condition',relevance:3}],destination:{theme_id:'theme:work',question:input.anchor.title,content:null,scope:'仕事',exclusions:''}});
+ });
+ assert.equal(calls,1);assert.equal(run.selection.search_mode,'legacy');
+ await discoverRecords(f.env,args,()=>{throw Error('must not call AI');});assert.equal(calls,1);
+ await assert.rejects(discoverRecords(f.env,{...args,search_mode:'unknown',idempotency_key:'invalid-mode'},()=>{throw Error('must not call AI');}),/検索方法/);
+});
