@@ -1,4 +1,4 @@
-import {drilldown,saveDrilldown} from './drilldown.ts';
+import {drilldown,saveDrilldown,addDrilldownCandidate} from './drilldown.ts';
 import {callBook} from './book-operations.ts';
 import {readDiscovery,latestDiscovery,integrateRecords} from './discovery.ts';
 import {automaticAI} from './ai-policy.ts';
@@ -237,7 +237,7 @@ export async function route(request:Request,env:Env,ctx:ExecutionContext,trusted
  if(!path.startsWith('/api/'))return env.ASSETS.fetch(request);
  if(!trustedService&&!env.ACCESS_AUD&&!await loggedIn(request,env))fail(401,'ログインしてください。');
  const replay=await replayReceipt(env,request);if(replay)return json(replay);
- const drill=/^\/api\/themes\/([^/]+)\/drilldown(?:\/(save))?$/.exec(path);if(drill&&method==='POST')return json(await (drill[2]?saveDrilldown:drilldown)(env,decodeURIComponent(drill[1]),await jsonBody(request.clone())));
+ const drill=/^\/api\/themes\/([^/]+)\/drilldown(?:\/(save|candidates))?$/.exec(path);if(drill&&method==='POST')return json(await (drill[2]==='candidates'?addDrilldownCandidate:drill[2]?saveDrilldown:drilldown)(env,decodeURIComponent(drill[1]),await jsonBody(request.clone())));
  if(path==='/api/book/integrate'&&method==='POST')return json(await integrateRecords(env,await jsonBody(request.clone())));
  if(path==='/api/book/discovery'&&method==='GET')return json(url.searchParams.has('id')?await readDiscovery(env,url.searchParams.get('id')!):await latestDiscovery(env,url.searchParams.get('anchor')!));
  if(path==='/api/book/discover'&&method==='POST')return json(await callBook(env,ctx,'discover_relations',await jsonBody(request.clone())),202);
