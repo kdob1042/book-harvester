@@ -7,7 +7,7 @@ export class AiError extends Error {
  code:string; retryable:boolean;
  constructor(code:string,retryable=false){super(code);this.code=code;this.retryable=retryable;}
 }
-type ProviderResult={status?:string;output?:{type?:string;action?:{sources?:{url?:string}[]};content?:{type:string;text?:string;annotations?:{url?:string}[]}[]}[];data?:{embedding:number[]}[];text?:string;usage?:{input_tokens?:number;prompt_tokens?:number;output_tokens?:number}};
+type ProviderResult={status?:string;output?:{type?:string;action?:{sources?:{url?:string}[]};content?:{type:string;text?:string;annotations?:{url?:string}[]}[]}[];data?:{embedding:number[]}[];text?:string;usage?:{input_tokens?:number;prompt_tokens?:number;output_tokens?:number};model?:string};
 export async function call(env:Env,captureId:string|null,endpoint:string,model:string,payload:FormData|Record<string,unknown>,fetcher:typeof fetch=fetch):Promise<ProviderResult> {
  if(!aiConfigured(env))throw new AiError('ai_not_configured');
  if(subscriptionMode(env)&&endpoint!=='responses')throw new AiError(endpoint==='embeddings'?'subscription_embeddings_unsupported':'subscription_audio_unsupported');
@@ -28,7 +28,7 @@ export async function call(env:Env,captureId:string|null,endpoint:string,model:s
   if(!session&&!response.ok){await response.body?.cancel();throw new AiError(response.status===429?'rate_limit':response.status>=500?'provider_unavailable':'provider_rejected',response.status===429||response.status>=500);}
   const data:ProviderResult=session?await completedResponse(response):await response.json<ProviderResult>();
   await stmt(env,'UPDATE ai_calls SET state=?,input_tokens=?,output_tokens=? WHERE id=?','completed',data.usage?.input_tokens??data.usage?.prompt_tokens??0,data.usage?.output_tokens||0,callId).run();
-  return data;
+  return {...data,model};
  } catch(e) {
   console.error(JSON.stringify({event:'ai_call_failed',call_id:callId,endpoint,model,code:e instanceof SubscriptionError||e instanceof AiError?e.code:'connection_failed'}));
   await stmt(env,'UPDATE ai_calls SET state=? WHERE id=?','failed',callId).run();
@@ -65,7 +65,7 @@ export async function harvest(env:Env,capture:Capture,assets:Asset[],transcript:
   const result=validateHarvest(JSON.parse(blocks.filter(b=>b.type==='output_text').map(b=>b.text).join('')),`${inputText}\n${transcript}\n${capture.note}`) as Harvest;
   if(capture.import_origin==='ai'&&result.claims.some(c=>c.evidence.origin==='source'||c.evidence.origin==='user'&&!capture.note.includes(c.evidence.quote||'\0')))throw new AiError('invalid_import_attribution');
   if(!assets.some(a=>a.mime.startsWith('image/'))&&result.claims.some(c=>c.evidence.origin!=='ai'&&!`${inputText}\n${transcript}\n${capture.note}`.includes(c.evidence.quote||'\0')))throw new AiError('invalid_quote');
-  return {result,usage:data.usage||{}};
+  return {result,usage:data.usage||{},model:data.model||env.OPENAI_MODEL};
  } catch(e) {if(e instanceof SubscriptionError)throw new AiError(e.code,e.retryable);if(e instanceof AiError)throw e;throw new AiError('invalid_output');}
 }
 export async function answer(env:Env,capture:Capture,h:Harvest,question:string,fetcher?:typeof fetch) {
