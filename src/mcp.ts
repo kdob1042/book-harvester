@@ -12,10 +12,10 @@ const apiHandler:Required<Pick<ExportedHandler<McpEnv>,'fetch'>>={async fetch(re
  const server=new McpServer({name:'book-harvester',version:'0.1.0'});
  for(const [name,description,scope,properties] of toolSpecs){
   const shape:Record<string,z.ZodType>= {};for(const [key,spec] of Object.entries(properties)){
-   const p=spec as {type:string;enum?:string[];minimum?:number;maximum?:number;items?:{type:string}};let schema:z.ZodType=p.type==='object'?z.object({download_url:z.string().url().max(8000),file_id:z.string().max(200),mime_type:z.string().max(100).optional(),file_name:z.string().max(150).optional()}).strict():p.type==='integer'?z.number().int().min(p.minimum??1).max(p.maximum??Number.MAX_SAFE_INTEGER):p.type==='array'?z.array(p.items?.type==='integer'?z.number().int().min(1):z.string().max(2000)).min(1).max(20):p.enum?z.enum(p.enum as [string,...string[]]):z.string().max(key==='text'||key==='body'?20000:2000);
+   const p=spec as {type:string;enum?:string[];minimum?:number;maximum?:number;items?:{type:string}};let schema:z.ZodType=p.type==='boolean'?z.boolean():p.type==='object'?z.object({download_url:z.string().url().max(8000),file_id:z.string().max(200),mime_type:z.string().max(100).optional(),file_name:z.string().max(150).optional()}).strict():p.type==='integer'?z.number().int().min(p.minimum??1).max(p.maximum??Number.MAX_SAFE_INTEGER):p.type==='array'?z.array(p.items?.type==='integer'?z.number().int().min(1):z.string().max(2000)).min(key==='aliases'?0:1).max(20):p.enum?z.enum(p.enum as [string,...string[]]):z.string().max(key==='text'||key==='body'?20000:2000);
    shape[key]=(required[name]||[]).includes(key)?schema:schema.optional();
   }
-  server.registerTool(name,{description,inputSchema:shape,...'file' in properties?{_meta:{'openai/fileParams':['file']}}:{},annotations:{readOnlyHint:scope==='book:read',destructiveHint:name==='delete_capture',openWorldHint:name==='start_research',idempotentHint:name==='save_capture'}},async args=>{
+  server.registerTool(name,{description,inputSchema:shape,...'file' in properties?{_meta:{'openai/fileParams':['file']}}:{},annotations:{readOnlyHint:scope==='book:read',destructiveHint:['delete_capture','apply_theme_change','apply_concept_change','merge_theme'].includes(name),openWorldHint:name==='start_research',idempotentHint:scope==='book:read'||(required[name]||[]).includes('idempotency_key')}},async args=>{
    if(!auth.auth?.scope.includes(scope))return {isError:true,content:[{type:'text',text:JSON.stringify({error:{code:'insufficient_scope',required:scope}})}]};
    try {
     const a=args as Record<string,unknown>;
@@ -24,7 +24,7 @@ const apiHandler:Required<Pick<ExportedHandler<McpEnv>,'fetch'>>={async fetch(re
     if(name==='preview_delete'){
      const record=await env.BOOK.call('get_record',{id:a.id}) as {data:{version:number;assets:unknown[];views?:unknown[]}};
      if(record.data.version!==a.version)throw new Error('version_conflict');
-     const token=crypto.randomUUID();await env.OAUTH_KV.put(`delete:${token}`,JSON.stringify({email:auth.props.email,id:a.id,version:a.version}),{expirationTtl:300});result={id:a.id,version:a.version,confirmation:token,expires_in:300,impact:'Deletes record, originals and generated evidence. Linked user views and their revisions are also deleted.',assets:record.data.assets.length};
+     const token=crypto.randomUUID();await env.OAUTH_KV.put(`delete:${token}`,JSON.stringify({email:auth.props.email,id:a.id,version:a.version}),{expirationTtl:300});result={id:a.id,version:a.version,confirmation:token,expires_in:300,impact:'Deletes record, originals and generated evidence. Adopted user views and their revision snapshots are retained; their source evidence becomes unavailable.',assets:record.data.assets.length};
     }else{
      if(name==='delete_capture'){
       const value=await env.OAUTH_KV.get(`delete:${a.confirmation}`);if(!value)throw new Error('confirmation_expired');const v=JSON.parse(value);if(v.email!==auth.props.email||v.id!==a.id||v.version!==a.version)throw new Error('confirmation_mismatch');

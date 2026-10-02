@@ -264,7 +264,7 @@ function renderCapture() {
       ${h.concepts.length ? `<p class="concepts">${h.concepts.map(k => esc(k.name)).join(' · ')}</p>` : ''}</section>
       ${h.questions.length ? `<section class="detail-section"><h2>考えの続き</h2>${h.questions.map(q => `<p>${esc(q.text)}</p>`).join('')}</section>` : ''}
       ${graphMarkup(graph)}
-      ${proposal ? `<section class="draft"><h2>見方への影響 · AIの修正案</h2><p class="subtle">${esc(proposal.reason)}</p><details class="fold"><summary>変更する箇所と理由を読む</summary><p class="subtle">いまの文章</p><p class="prose">${esc(proposal.from_text)}</p><p class="subtle">修正案</p><p class="prose">${esc(proposal.to_text)}</p><button class="quiet" data-hide="${esc(`proposal:${proposal.view_id}:${proposal.from_text}:${proposal.to_text}`)}">この案を表示しない</button></details>${proposal.stale?'<p class="subtle">現行の見方に合わせて、自動で比較し直しています。</p>':'<button id="adopt-proposal" class="quiet">この見方に更新</button>'}</section>` : h.view_draft ? `<section class="draft"><h2>${adopted ? '自分の見方に残しました' : '見方の案 · AIが考えたこと'}</h2><p class="prose">${esc(h.view_draft.text)}</p><p class="subtle">${esc(h.view_draft.reason)}</p>
+      ${proposal ? `<section class="draft"><h2>見方への影響 · AIの修正案</h2><p class="subtle">${esc(proposal.reason)}</p><details class="fold"><summary>変更する箇所と理由を読む</summary><p class="subtle">いまの文章</p><p class="prose">${esc(proposal.from_text)}</p><p class="subtle">修正案</p><p class="prose">${esc(proposal.to_text)}</p><button class="quiet" data-hide="${esc(`proposal:${proposal.view_id}:${proposal.from_text}:${proposal.to_text}`)}">この案を表示しない</button></details>${proposal.stale?'<p class="subtle">現行の見方が変わっています。関連を探して案を更新できます。</p>':'<button id="adopt-proposal" class="quiet">この見方に更新</button>'}</section>` : h.view_draft ? `<section class="draft"><h2>${adopted ? '自分の見方に残しました' : '見方の案 · AIが考えたこと'}</h2><p class="prose">${esc(h.view_draft.text)}</p><p class="subtle">${esc(h.view_draft.reason)}</p>
       ${adopted ? `<a href="#" id="adopted-view">採用した見方と履歴を読む</a>` : '<button id="adopt" class="quiet">自分の見方にする</button>'}</section>` : ''}
       ${h.uncertainties.length ? `<p class="subtle">読み取りの留保：${h.uncertainties.map(esc).join(' ／ ')}</p>` : ''}` : ''}
     <details class="fold" id="original"><summary>原資料を読む</summary>
@@ -380,7 +380,7 @@ function notifyReflection(reflections){
 }
 function privacyDialog() {
   modal('AIと保存について', `<div class="privacy"><p>残した写真・音声・文章は、このアプリの非公開データとして保存します。</p>
-    <p>解析には、対象の原資料、自分の一言、前回の書名だけをOpenAIへ送ります。横断接続には、過去の関連候補を最大12記録・120ノードと、現行の見方を最大6件送ります。通常の記録ごとに確認操作はありません。</p>
+    <p>解析には、対象の原資料、自分の一言、前回の書名だけをOpenAIへ送ります。横断接続には、過去の関連候補を最大12記録・120ノードと、現行の見方を最大6件送ります。通常保存は読み取りまでです。関連探索とテーマの理解の更新は、ボタンで依頼した時だけ実行します。</p>
     <p>AIが作るのは知見と見方の案です。「自分の見方にする」を選んだ文章だけが、本人の見方として残ります。</p>
     <p class="subtle">${state?.ai_configured ? 'AI解析は設定済みです。' : 'AI解析は未設定です。原資料を保存して待ちます。'}<br>今日の呼び出し ${state?.usage.calls || 0} / ${state?.daily_limit || '—'}（UTC日次）。写真・文章は読み取りと横断整理で通常2回、${state?.ai?.mode==='chatgpt'?'音声は原資料の保存のみ。':'音声は文字起こしを含めて通常3回。'}<br>${state?.ai?.mode==='chatgpt' ? 'AI解析は ChatGPT のサブスク枠のみを使います。有料APIへの自動切り替えはありません。音声文字起こしと意味索引は使わず、検索は語句検索です。接続状態：'+esc(state.ai.state)+ '。' : '解析と意味索引は有料APIを使います。上限は呼び出し数です。'}</p>
     <p class="subtle">保存した記録と採用履歴から、区切り・日・週の振り返りを自動で整理します。最大20記録・10改訂をAI処理へ送ります。</p>
@@ -401,11 +401,12 @@ setInterval(async () => {
   if (!state || document.hidden || dialog.open || uploading || pollBusy) return;
   pollBusy = true;
   try {
-    if (currentCapture && (['pending','running','blocked'].includes(currentCapture.job?.state)||['pending','running','blocked'].includes(currentCapture.graph?.job?.state))) {
+    if (currentCapture && (['pending','running','blocked'].includes(currentCapture.job?.state)||['pending','running','blocked'].includes(currentCapture.graph?.job?.state)||['pending','running','blocked'].includes(currentCapture.membership_job?.state))) {
       if (!app.querySelector('details[open]')) {
         const fresh = await api(`/api/captures/${currentCapture.id}`);
-        if (fresh.job?.state !== currentCapture.job?.state || fresh.version !== currentCapture.version || fresh.graph?.job?.state !== currentCapture.graph?.job?.state || fresh.graph?.generation_id !== currentCapture.graph?.generation_id) { currentCapture = fresh; renderCapture(); }
+        if (fresh.job?.state !== currentCapture.job?.state || fresh.version !== currentCapture.version || fresh.graph?.job?.state !== currentCapture.graph?.job?.state || fresh.graph?.generation_id !== currentCapture.graph?.generation_id || fresh.membership_job?.state !== currentCapture.membership_job?.state) { currentCapture = fresh; renderCapture(); }
       }
+    } else if(currentView?.theme&&['pending','running','blocked'].includes(currentView.job_state)&&!app.querySelector('details[open]')){const fresh=await api(`/api/themes/${encodeURIComponent(currentView.id)}`);if(fresh.revision!==currentView.revision||fresh.job?.state!==currentView.job_state)await openTheme(currentView.id);
     } else if (!currentCapture && !currentView) {
       state = await api(searchPath()); renderFeed();
     }
@@ -485,12 +486,12 @@ initDevice().then(()=>resume()).catch(e=>showNotice(e.message));
 function themeHome(index){
  if(!index)return '';
  const themes=index.themes||[],domains=index.domains||[];
- return `<section class="theme-home" aria-label="育てている問い"><p class="section-label">育てている問い</p>${domains.map(d=>{const list=themes.filter(t=>JSON.parse(t.domain_ids||'[]').includes(d.id));return `<section class="theme-domain"><h2>${esc(d.name)}</h2>${list.map(t=>{const r=t.result?JSON.parse(t.result):null;return `<button class="capture-row theme-row" data-theme="${esc(t.id)}"><h3>${esc(t.question)}</h3><p>${esc(t.stale?'原根拠が変わったため、理解を更新しています。':r?.understanding[0]?.text||(t.material_count?'材料をもとに理解を整理しています。':'これから材料を集める問いです。'))}</p>${!t.stale&&r?.changed&&r?.change_reason?`<p class="subtle">今回の変化 · ${esc(r.change_reason)}</p>`:''}${['failed','blocked'].includes(t.job_state)?'<p class="subtle">整理は保留中です。保存した材料と以前の理解は読めます。</p>':''}</button>`;}).join('')}</section>`;}).join('')}</section>`;
+ return `<section class="theme-home" aria-label="育てている問い"><p class="section-label">育てている問い</p>${domains.map(d=>{const list=themes.filter(t=>JSON.parse(t.domain_ids||'[]').includes(d.id));return `<section class="theme-domain"><h2>${esc(d.name)}</h2>${list.map(t=>{const r=t.result?JSON.parse(t.result):null;return `<button class="capture-row theme-row" data-theme="${esc(t.id)}"><h3>${esc(t.question)}</h3><p>${esc(t.stale?'根拠が変わっています。更新前の理解です。':r?.understanding[0]?.text||(t.material_count?'材料が集まっています。テーマを開いて理解を更新できます。':'これから材料を集める問いです。'))}</p>${!t.stale&&r?.changed&&r?.change_reason?`<p class="subtle">今回の変化 · ${esc(r.change_reason)}</p>`:''}${['failed','blocked'].includes(t.job_state)?'<p class="subtle">整理は保留中です。保存した材料と以前の理解は読めます。</p>':''}</button>`;}).join('')}</section>`;}).join('')}</section>`;
 }
 function wireThemeLinks(){document.querySelectorAll('[data-theme]').forEach(el=>el.onclick=event=>{event.preventDefault();openTheme(el.dataset.theme).catch(e=>showNotice(e.message));});}
 async function openTheme(themeId,fromCapture=null){
  const t=await api(`/api/themes/${encodeURIComponent(themeId)}`);if(t.redirect)return openTheme(t.redirect,fromCapture);
- currentCapture=null;currentView={id:themeId,theme:true};
+ currentCapture=null;currentView={id:themeId,theme:true,revision:t.revision,job_state:t.job?.state};
  const r=t.result;
  const sections=[['understanding','現在の暫定理解'],['changes','最近起きている変化'],['competing','競合する説明'],['conditions','成立条件と反例'],['questions','次に確かめたい問い']];
  const proof=e=>{const p=t.evidence.find(p=>p.claim_id===e.claim_id);return p?`<blockquote>${esc(p.quote||'AIの推論・原文引用なし')}<p class="subtle">${esc(({source:'資料の主張',user:'本人の発言',ai:'AIの推論'})[p.origin])} · ${esc(p.source_title||'出典未確認')}${p.page?` · p.${esc(p.page)}`:''} · ${esc(({support:'説明の支持',counterexample:'反例',condition:'条件追加',example:'具体例',background:'背景',unresolved:'未解決'})[e.role])}</p><a href="#" data-theme-source="${esc(p.capture_id)}">原記録を読む</a></blockquote>`:'';};
@@ -501,7 +502,8 @@ async function openTheme(themeId,fromCapture=null){
  ${t.relations.length?`<section class="detail-section"><h2>ほかの問いとのつながり</h2>${t.relations.map(x=>{const p=JSON.parse(x.payload);return `<p>${esc(p.common_structure)}</p><p class="subtle">違い：${esc(p.important_difference)}</p><a href="#" data-theme="${esc(x.to_theme)}">つながるテーマを読む</a>`;}).join('')}</section>`:''}
  ${t.proposals.length?`<details class="fold"><summary>自分の見方への案</summary><p class="subtle">採用したときだけ、自分の見方に保存します。</p>${t.proposals.map(p=>`<p class="prose">${esc(p.to_text)}</p><p>${esc(p.reason)}</p><button class="quiet" data-theme-adopt="${p.id}">この見方を採用する</button><button class="quiet" data-theme-hide="${p.id}">この案を表示しない</button>`).join('')}</details>`:''}
  ${t.views.length?`<section class="detail-section"><h2>自分が採用した見方</h2>${t.views.map(v=>`<a href="#" data-theme-view="${v.id}">${esc(v.body)}</a>`).join('<br>')}</section>`:''}
- <details class="fold"><summary>この問いに集まった記録</summary>${t.materials.map(m=>`<p>${esc(m.reason)}<br><a href="#" data-theme-source="${m.capture_id}">原記録を読む</a></p>`).join('')||'<p>まだ関連する記録はありません。</p>'}</details></article>`;
+ <button id="theme-rebuild" class="quiet">理解を更新する</button><details class="fold"><summary>この問いに集まった記録</summary>${t.materials.map(m=>`<p>${esc(m.reason)}<br><a href="#" data-theme-source="${m.capture_id}">原記録を読む</a></p>`).join('')||'<p>まだ関連する記録はありません。</p>'}</details></article>`;
+ bind('#theme-rebuild','click',async event=>{event.target.disabled=true;try{await api(`/api/themes/${encodeURIComponent(themeId)}/rebuild`,json('POST',{version:t.theme.version,idempotency_key:crypto.randomUUID()}));await openTheme(themeId);showNotice('理解の更新を予約しました。');}catch(e){showNotice(e.message);event.target.disabled=false;}});
  wireHeader();wireThemeLinks();bind('#back','click',()=>home().catch(e=>showNotice(e.message)));bind('#theme-origin-back','click',()=>openCapture(fromCapture));
  document.querySelectorAll('[data-theme-source]').forEach(el=>el.onclick=async event=>{event.preventDefault();await openCapture(el.dataset.themeSource);const parent=document.createElement('button');parent.className='back';parent.textContent='← この根拠を使うテーマ';parent.onclick=()=>openTheme(themeId,currentCapture?.id);$('#back').after(parent);});
  document.querySelectorAll('[data-theme-view]').forEach(el=>el.onclick=event=>{event.preventDefault();openView(el.dataset.themeView).catch(e=>showNotice(e.message));});

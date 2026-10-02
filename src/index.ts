@@ -1,3 +1,4 @@
+import {callBook} from './book-operations.ts';
 import {readDiscovery,latestDiscovery,integrateRecords} from './discovery.ts';
 import {automaticAI} from './ai-policy.ts';
 import {themeContext,saveAnalysis,rebuildTheme,discover} from './book-actions.ts';
@@ -35,7 +36,7 @@ async function list(env:Env,search:string,semanticIds:string[]=[],filters={sourc
  s.title AS source_title,s.certainty AS source_certainty,j.state,j.error_code,h.result,substr(c.original_text,1,100) AS original_preview
  FROM captures c LEFT JOIN sources s ON s.id=c.source_id LEFT JOIN jobs j ON j.capture_id=c.id AND j.version=c.version
  LEFT JOIN harvests h ON h.capture_id=c.id AND h.version=c.version
- WHERE (c.id IN(SELECT value FROM json_each(?)) OR ?='' OR c.original_text LIKE ? ESCAPE '\\' OR c.note LIKE ? ESCAPE '\\' OR h.result LIKE ? ESCAPE '\\' OR s.title LIKE ? ESCAPE '\\'
+ WHERE NOT EXISTS(SELECT 1 FROM capture_visibility v WHERE v.capture_id=c.id AND v.hidden=1) AND (c.id IN(SELECT value FROM json_each(?)) OR ?='' OR c.original_text LIKE ? ESCAPE '\\' OR c.note LIKE ? ESCAPE '\\' OR h.result LIKE ? ESCAPE '\\' OR s.title LIKE ? ESCAPE '\\'
  OR EXISTS(SELECT 1 FROM current_graph_nodes n WHERE n.capture_id=c.id AND (n.text LIKE ? ESCAPE '\\' OR n.payload LIKE ? ESCAPE '\\'))
  OR EXISTS(SELECT 1 FROM current_graph_relations r WHERE r.capture_id=c.id AND r.payload LIKE ? ESCAPE '\\'))
  AND (?='' OR s.title LIKE ? ESCAPE '\\') AND (?='' OR substr(s.published_at,1,4)=?)
@@ -189,7 +190,7 @@ function exportData(env:Env){
  const stream=new ReadableStream<Uint8Array>({async start(controller){
   try{
    controller.enqueue(encoder.encode(`{"format":"book-harvester/v1","exported_at":${JSON.stringify(new Date().toISOString())}`));
-   for(const table of ['discovery_runs','integration_runs','sources','captures','capture_revisions','harvests','answers','views','view_revisions','asset_transcripts','assets','graph_jobs','graph_generations','graph_nodes','concepts','concept_mentions','graph_relations','graph_dependencies','view_proposals','graph_overrides','reading_sessions','reading_session_members','reflection_jobs','reflections','revisit_state','import_jobs','import_items','bibliography_jobs','research_runs','research_materials','external_source_index','embeddings','embedding_jobs','concept_overrides','concept_edits','capture_tombstones','sync_events','domains','lenses','themes','theme_domains','theme_memberships','theme_revisions','theme_syntheses','synthesis_evidence','theme_claim_relations','theme_relations','theme_view_links','theme_overrides','theme_proposals','theme_history','theme_dependencies','theme_member_lenses']){
+   for(const table of ['discovery_runs','integration_runs','sources','captures','capture_revisions','harvests','answers','views','view_revisions','asset_transcripts','assets','graph_jobs','graph_generations','graph_nodes','concepts','concept_mentions','graph_relations','graph_dependencies','view_proposals','graph_overrides','reading_sessions','reading_session_members','reflection_jobs','reflections','revisit_state','import_jobs','import_items','bibliography_jobs','research_runs','research_materials','external_source_index','embeddings','embedding_jobs','concept_overrides','concept_edits','capture_tombstones','sync_events','domains','lenses','themes','theme_domains','theme_memberships','theme_revisions','theme_syntheses','synthesis_evidence','theme_claim_relations','theme_relations','theme_view_links','theme_overrides','theme_proposals','theme_history','theme_dependencies','theme_member_lenses','theme_analysis_drafts','theme_changes','capture_visibility']){
     controller.enqueue(encoder.encode(`,${JSON.stringify(table)}:[`));let offset=0,first=true;
     while(true){
      const records=await rows<Record<string,unknown>>(env,`SELECT * FROM ${table} ORDER BY rowid LIMIT 50 OFFSET ?`,offset);
@@ -220,7 +221,7 @@ function exportData(env:Env){
  return new Response(stream,{headers:{'Content-Type':'application/json; charset=utf-8','Content-Disposition':'attachment; filename="book-harvester-export.json"'}});
 }
 
-export async function route(request:Request,env:Env,ctx:ExecutionContext,trustedService=false){
+export async function route(request:Request,env:Env,ctx:ExecutionContext,trustedService=false):Promise<Response>{
  const url=new URL(request.url),path=url.pathname,method=request.method;
  if(!trustedService&&env.ACCESS_AUD&&!await accessAuthorized(env,ctx,request))fail(403,'Cloudflareで本人のアカウントにログインしてください。');
  if(!['GET','HEAD'].includes(method)&&request.headers.get('origin')!==env.APP_ORIGIN)fail(403,'この画面から操作し直してください。');
@@ -235,8 +236,11 @@ export async function route(request:Request,env:Env,ctx:ExecutionContext,trusted
  const replay=await replayReceipt(env,request);if(replay)return json(replay);
  if(path==='/api/book/integrate'&&method==='POST')return json(await integrateRecords(env,await jsonBody(request.clone())));
  if(path==='/api/book/discovery'&&method==='GET')return json(url.searchParams.has('id')?await readDiscovery(env,url.searchParams.get('id')!):await latestDiscovery(env,url.searchParams.get('anchor')!));
- if(path==='/api/book/discover'&&method==='POST')return json(await discover(env,ctx,await jsonBody(request.clone())),202);
- const themeAction=/^\/api\/themes\/([^/]+)\/(context|analysis|rebuild)$/.exec(path);if(themeAction){const a={...await (method==='GET'?Promise.resolve({}):jsonBody(request.clone())),id:decodeURIComponent(themeAction[1])};if(themeAction[2]==='context'&&method==='GET')return json(await themeContext(env,a.id));if(themeAction[2]==='analysis'&&method==='POST')return json(await saveAnalysis(env,a),201);if(themeAction[2]==='rebuild'&&method==='POST')return json(await rebuildTheme(env,ctx,a),202);}
+ if(path==='/api/book/discover'&&method==='POST')return json(await callBook(env,ctx,'discover_relations',await jsonBody(request.clone())),202);
+ const themeAction=/^\/api\/themes\/([^/]+)\/(context|analysis|rebuild)$/.exec(path);if(themeAction){const a={...await (method==='GET'?Promise.resolve({}):jsonBody(request.clone())),id:decodeURIComponent(themeAction[1])};if(themeAction[2]==='context'&&method==='GET')return json(await themeContext(env,a.id));if(themeAction[2]==='analysis'&&method==='POST')return json(await callBook(env,ctx,'save_analysis_draft',a),201);if(themeAction[2]==='rebuild'&&method==='POST')return json(await callBook(env,ctx,'rebuild_theme',a),202);}
+ if(path==='/api/theme-changes'&&method==='POST')return json(await callBook(env,ctx,'propose_theme_change',await jsonBody(request.clone())),201);
+ const themeChange=/^\/api\/theme-changes\/([a-f0-9-]{36})(?:\/(apply|undo))?$/.exec(path);if(themeChange){if(!themeChange[2]&&method==='GET')return json(await callBook(env,ctx,'get_theme_change',{id:themeChange[1]}));if(themeChange[2]&&method==='POST')return json(await callBook(env,ctx,themeChange[2]==='apply'?'apply_theme_change':'undo_theme_change',{...await jsonBody(request.clone()),id:themeChange[1]}));}
+ if(path==='/api/book/visibility'&&method==='POST')return json(await callBook(env,ctx,'set_visibility',await jsonBody(request.clone())));
  if(path==='/api/themes/migration'&&method==='GET')return json(await themeMigrationStatus(env));
  if(path==='/api/themes/migration'&&method==='POST'){const r=await manageThemeMigration(env,await jsonBody(request.clone()));ctx.waitUntil(dispatch(env));return json(r);}
  if(path==='/api/themes'&&method==='GET')return json(await listThemes(env));
@@ -261,7 +265,7 @@ export async function route(request:Request,env:Env,ctx:ExecutionContext,trusted
  const match=/^\/api\/captures\/([a-f0-9-]{36})(?:\/(assets|retry|adopt|ask|proposal|hide))?$/.exec(path);
  if(match){
   const [,captureId,action]=match;
-  if(!action&&method==='GET'){const c=await getCapture(env,captureId);if(!c)fail(404,'記録が見つかりません。');return json({...c,themes:await captureThemes(env,c.id),graph:await readGraph(env,c.id,c.version),import_ref:await stmt(env,'SELECT i.job_id,i.ordinal,i.locator,j.name FROM import_items i JOIN import_jobs j ON j.id=i.job_id WHERE i.capture_id=?',c.id).first(),bibliography:c.source_bibliography?JSON.parse(c.source_bibliography):null});}
+  if(!action&&method==='GET'){const c=await getCapture(env,captureId);if(!c)fail(404,'記録が見つかりません。');return json({...c,membership_job:await stmt(env,"SELECT id,version,state,error_code FROM theme_jobs WHERE kind='membership' AND target_id=? AND version=?",c.id,c.version).first(),themes:await captureThemes(env,c.id),graph:await readGraph(env,c.id,c.version),import_ref:await stmt(env,'SELECT i.job_id,i.ordinal,i.locator,j.name FROM import_items i JOIN import_jobs j ON j.id=i.job_id WHERE i.capture_id=?',c.id).first(),bibliography:c.source_bibliography?JSON.parse(c.source_bibliography):null});}
   if(!action&&method==='PATCH'){const saved=await editCapture(request,env,captureId);ctx.waitUntil(dispatch(env));return saved;}
   if(!action&&method==='DELETE')return deleteCapture(request,env,captureId);
   if(action==='assets'&&method==='POST'){const saved=await supplement(request,env,captureId);ctx.waitUntil(dispatch(env));return saved;}

@@ -1,22 +1,33 @@
 import {readDiscovery,integrateRecords} from './discovery.ts';
+import {overview,recordEvidence,history,themeRelations} from './book-reads.ts';
+import {readBookJob,changeBookJob,jobStages} from './book-jobs.ts';
+import {setVisibility} from './book-visibility.ts';
+import {searchKnowledge} from './book-search.ts';
+import {proposeThemeChange,readThemeChange,applyThemeChange} from './theme-changes.ts';
 import {fileOperation} from './book-files.ts';
-import {themeContext,saveAnalysis,rebuildTheme,discover,exportRecords} from './book-actions.ts';
+import {themeContext,saveAnalysis,rebuildTheme,discover,exportRecords,saveViewProposal} from './book-actions.ts';
 import {automaticAI} from './ai-policy.ts';
 import {route} from './index.ts';
 import {rows,stmt,fail,digest} from './core.ts';
 import {toolSpecs} from './mcp-tools.ts';
 async function executeBook(env:Env,ctx:ExecutionContext,name:string,a:Record<string,unknown>) {
   if(!toolSpecs.some(s=>s[0]===name))fail(404,'unknown_tool');
-  if(name==='get_status')return {capabilities:{records:true,views:true,research:true,themes:true,attachments:true,analysis_drafts:true,explicit_discovery:true,explicit_synthesis:true,export:true},ai_policy:automaticAI(env)?'automatic_legacy':'ingestion_and_explicit_actions',jobs:await rows(env,'SELECT state,count(*) AS count FROM jobs GROUP BY state')};
-  if(name==='search_records'){
-   const q=String(a.query||'').slice(0,200).replace(/[\\%_]/g,'\\$&'),limit=Number(a.limit||20),offset=Number(a.cursor||0);
-   if(!Number.isInteger(limit)||limit<1||limit>50||!Number.isInteger(offset)||offset<0)fail(400,'invalid_pagination');
-   const found=await rows(env,`SELECT c.id,c.version,c.kind,c.created_at,substr(c.original_text,1,500) AS preview,s.title AS source_title FROM captures c LEFT JOIN sources s ON c.source_id=s.id LEFT JOIN harvests h ON h.capture_id=c.id AND h.version=c.version WHERE c.original_text LIKE ? ESCAPE '\\' OR c.note LIKE ? ESCAPE '\\' OR h.result LIKE ? ESCAPE '\\' OR s.title LIKE ? ESCAPE '\\' ORDER BY c.created_at DESC,c.id DESC LIMIT ? OFFSET ?`,...Array(4).fill(`%${q}%`),limit+1,offset);
-   return {records:found.slice(0,limit),next_cursor:found.length>limit?offset+limit:null,search_scope:'all_history',method:'sql_literal',ai_called:false};
-  }
+  if(name==='get_status')return {capabilities:{records:true,views:true,research:true,themes:true,attachments:true,analysis_drafts:true,explicit_discovery:true,explicit_synthesis:true,export:true},ai_policy:automaticAI(env)?'automatic_legacy':'ingestion_and_explicit_actions',stages:await jobStages(env),jobs:await rows(env,'SELECT state,count(*) AS count FROM jobs GROUP BY state')};
+  if(name==='get_overview')return overview(env,a);
+  if(name==='get_evidence')return recordEvidence(env,a);
+  if(name==='get_history')return history(env,a);
+  if(name==='get_relations'&&a.entity==='theme')return themeRelations(env,String(a.id));
+  if(name==='get_job'&&['theme','graph','import'].includes(String(a.kind)))return readBookJob(env,a);
+  if(['retry_job','cancel_job'].includes(name)&&['theme','graph'].includes(String(a.kind)))return changeBookJob(env,ctx,a,name==='cancel_job');
+  if(name==='set_visibility')return setVisibility(env,a);
+  if(name==='search_records')return searchKnowledge(env,a);
+  if(name==='propose_theme_change')return proposeThemeChange(env,a);
+  if(name==='get_theme_change')return readThemeChange(env,String(a.id));
+  if(name==='apply_theme_change'||name==='undo_theme_change')return applyThemeChange(env,String(a.id),name==='undo_theme_change');
   if(['save_file','attach_file','start_import'].includes(name))return fileOperation(env,ctx,name,a);
   if(name==='get_operation')return await stmt(env,'SELECT state,result_json,created_at FROM book_operation_receipts WHERE operation_key=?',`${a.operation}:${a.idempotency_key}`).first()||{state:'not_found'};
   if(name==='get_theme_context')return themeContext(env,String(a.id));
+  if(name==='save_view_proposal')return saveViewProposal(env,a);
   if(name==='save_analysis_draft')return saveAnalysis(env,a);
   if(name==='rebuild_theme')return rebuildTheme(env,ctx,a);
   if(name==='get_discovery')return readDiscovery(env,String(a.id));

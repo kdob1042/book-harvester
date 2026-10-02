@@ -1,3 +1,3 @@
 import {WorkerEntrypoint} from 'cloudflare:workers';
-import {callBook} from './book-operations.ts';
-export class BookService extends WorkerEntrypoint<Env> {call(name:string,args:Record<string,unknown>){return callBook(this.env,this.ctx,name,args);}}
+import {callBook} from './book-operations.ts';import {HttpError} from './core.ts';
+export class BookService extends WorkerEntrypoint<Env> {async call(name:string,args:Record<string,unknown>){try{return await callBook(this.env,this.ctx,name,args);}catch(e){const status=e instanceof HttpError?e.status:500,known=e instanceof HttpError&&/^[a-z][a-z_]{2,80}$/.test(e.message),code=known?e.message:({400:'invalid_request',404:'not_found',409:'version_conflict',410:'gone',413:'payload_too_large'} as Record<number,string>)[status]||'operation_failed';return {status,data:{error:{code,message:e instanceof HttpError?e.message:'The operation could not be completed; inspect its receipt before retrying.'}},url:this.env.APP_ORIGIN};}}}
