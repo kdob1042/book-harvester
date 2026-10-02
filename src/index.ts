@@ -250,6 +250,10 @@ export async function route(request:Request,env:Env,ctx:ExecutionContext,trusted
  if(themeMatch){const themeId=decodeURIComponent(themeMatch[1]);if(!themeMatch[2]&&method==='PATCH')return json(await editTheme(env,themeId,await jsonBody(request.clone())));if(themeMatch[2]==='merge'&&method==='POST')return json(await mergeTheme(env,themeId,await jsonBody(request.clone())));if(themeMatch[2]==='overrides'&&method==='POST')return json(await overrideTheme(env,themeId,await jsonBody(request.clone())));if(!themeMatch[2]&&method==='GET')return json(await readTheme(env,themeId));if(themeMatch[2]==='history'&&method==='GET'){const detail=await readTheme(env,themeId);return json(await rows(env,'SELECT * FROM theme_revisions WHERE theme_id=? ORDER BY version DESC LIMIT 20',themeId));}if(themeMatch[2]==='proposals'&&method==='POST')return json(await actThemeProposal(env,themeId,await jsonBody(request.clone())));}
  if(path==='/api/sync'&&method==='GET')return json(await syncDelta(env,url.searchParams.get('cursor')));
  if(path==='/api/logout'&&method==='POST')return json({ok:true,...(env.ACCESS_AUD?{redirect:'/cdn-cgi/access/logout'}:{})},200,{'Set-Cookie':await logout(request,env)});
+ if(path==='/api/ai-activity'&&method==='GET'){
+  const active=await stmt(env,`SELECT count(*) AS n FROM (SELECT state,created_at FROM ai_calls ORDER BY rowid DESC LIMIT 20) WHERE state='started' AND created_at>?`,now()-120000).first<number>('n');
+  return json({active:Boolean(active),count:active||0});
+ }
  if(path==='/api/state'&&method==='GET'){
   const day=new Date().toISOString().slice(0,10),search=(url.searchParams.get('q')||'').slice(0,200),semantic=await semanticSearch(env,search),filters={source:(url.searchParams.get('source')||'').slice(0,200),year:/^\d{4}$/.test(url.searchParams.get('year')||'')?url.searchParams.get('year')!:'',origin:['source','user','ai'].includes(url.searchParams.get('origin')||'')?url.searchParams.get('origin')!:''};
   const [captures,views,current,usage,reflections,revisits,imports]=await Promise.all([
