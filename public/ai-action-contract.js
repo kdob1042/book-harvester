@@ -5,6 +5,8 @@ export function describeAIAction(path, method = 'GET') {
   if (method === 'POST') {
     if (/^\/api\/themes\/[^/]+\/drilldown$/.test(path)) return {label:'深掘り', mode:'inline'};
     if (/^\/api\/themes\/[^/]+\/relationships$/.test(path)) return {label:'統合候補の探索', mode:'inline'};
+    if (path === '/api/book/integration-proposals') return {label:'統合候補の探索', mode:'inline'};
+    if (path === '/api/book/integration-proposals/execute') return {label:'まとめて統合', mode:'inline'};
     if (path === '/api/book/discover') return {label:'関連の探索', mode:'inline'};
     if (path === '/api/book/integrate') return {label:'統合', mode:'inline'};
     if (/^\/api\/captures\/[^/]+\/ask$/.test(path)) return {label:'回答の作成', mode:'inline'};

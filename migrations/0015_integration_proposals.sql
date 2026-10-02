@@ -1,0 +1,2 @@
+CREATE TABLE integration_proposal_runs(id TEXT PRIMARY KEY,request_key TEXT UNIQUE NOT NULL,request_hash TEXT NOT NULL,state TEXT NOT NULL,error TEXT,created_at INTEGER NOT NULL);
+CREATE TABLE integration_proposals(id TEXT PRIMARY KEY,run_id TEXT NOT NULL REFERENCES integration_proposal_runs(id),discovery_id TEXT NOT NULL REFERENCES discovery_runs(id),position INTEGER NOT NULL,question TEXT NOT NULL,reason TEXT NOT NULL,materials_json TEXT NOT NULL,destination_id TEXT,state TEXT NOT NULL DEFAULT 'pending',attempt INTEGER NOT NULL DEFAULT 0,result_json TEXT,error TEXT);
