@@ -46,7 +46,7 @@ test('theme conversation draft is separate from records and views, bound to cont
 });
 test('explicit discovery persists candidates without changing graph or memberships',async t=>{
  const f=await fixture();t.after(f.close);t.after(()=>setProviderDouble(null));f.env.AI_EXECUTION_POLICY='explicit';const saved=await callBook(f.env,f.ctx,'save_capture',{text:sentence,source:'供給のしくみ',idempotency_key:'discovery-capture-key-001'});await callBook(f.env,f.ctx,'extract_record',{id:saved.data.id,version:1,idempotency_key:'discovery-extract-key-001'});await f.drain();
- setProviderDouble(async()=>graphResponse({},{candidates:[],destination:{theme_id:'theme:work',question:'専門性',scope:'仕事',exclusions:''}}));
+ setProviderDouble(async(_,options)=>JSON.parse(options.body).text.format.name==='discovery_search_plan_v1'?graphResponse({},{queries:[]}):graphResponse({},{candidates:[],destination:{theme_id:'theme:work',question:'専門性',scope:'仕事',exclusions:''}}));
  const args={id:saved.data.id,version:1,idempotency_key:'explicit-discovery-key-01'};
  const action=await callBook(f.env,f.ctx,'discover_relations',args);assert.equal(action.state,'completed');
  for(const table of ['theme_memberships','theme_revisions'])assert.equal(f.db.prepare(`SELECT count(*) AS n FROM ${table}`).get().n,0);
