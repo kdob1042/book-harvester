@@ -24,13 +24,14 @@ test('MCP tools have distinct scopes and required version for destructive action
  assert.equal(toolSpecs.find(x=>x[0]==='delete_capture')[2],'book:manage');
 });
 
-test('explicit AI policy performs ingestion once and schedules no automatic cross-record AI',async()=>{
+test('explicit AI policy extracts once after explicit action and schedules no automatic cross-record AI',async()=>{
  const f=await fixture();f.env.AI_EXECUTION_POLICY='explicit';
  const saved=await callBook(f.env,f.ctx,'save_capture',{text:sentence,source:'供給のしくみ',idempotency_key:'explicit-ingest-key-0001'});
+ await callBook(f.env,f.ctx,'extract_record',{id:saved.data.id,version:1,idempotency_key:'explicit-extract-test-001'});
  await f.drain();
  assert.equal(f.db.prepare('SELECT state FROM jobs WHERE capture_id=?').get(saved.data.id).state,'completed');
  for(const table of ['graph_jobs','theme_jobs','embedding_jobs','reflection_jobs','bibliography_jobs'])assert.equal(f.db.prepare(`SELECT count(*) AS n FROM ${table}`).get().n,0,table);
- assert.equal((await callBook(f.env,f.ctx,'get_status',{})).ai_policy,'ingestion_and_explicit_actions');
+ assert.equal((await callBook(f.env,f.ctx,'get_status',{})).ai_policy,'explicit_only');
 });
 test('theme conversation draft is separate from records and views, bound to context, and idempotent',async()=>{
  const f=await fixture();f.env.AI_EXECUTION_POLICY='explicit';
@@ -44,7 +45,7 @@ test('theme conversation draft is separate from records and views, bound to cont
  await assert.rejects(callBook(f.env,f.ctx,'save_analysis_draft',{...args,idempotency_key:'theme-draft-key-00002'}),/theme_context_changed/);
 });
 test('explicit discovery persists candidates without changing graph or memberships',async t=>{
- const f=await fixture();t.after(f.close);t.after(()=>setProviderDouble(null));f.env.AI_EXECUTION_POLICY='explicit';const saved=await callBook(f.env,f.ctx,'save_capture',{text:sentence,source:'供給のしくみ',idempotency_key:'discovery-capture-key-001'});await f.drain();
+ const f=await fixture();t.after(f.close);t.after(()=>setProviderDouble(null));f.env.AI_EXECUTION_POLICY='explicit';const saved=await callBook(f.env,f.ctx,'save_capture',{text:sentence,source:'供給のしくみ',idempotency_key:'discovery-capture-key-001'});await callBook(f.env,f.ctx,'extract_record',{id:saved.data.id,version:1,idempotency_key:'discovery-extract-key-001'});await f.drain();
  setProviderDouble(async()=>graphResponse({},{candidates:[],destination:{theme_id:'theme:work',question:'専門性',scope:'仕事',exclusions:''}}));
  const args={id:saved.data.id,version:1,idempotency_key:'explicit-discovery-key-01'};
  const action=await callBook(f.env,f.ctx,'discover_relations',args);assert.equal(action.state,'completed');

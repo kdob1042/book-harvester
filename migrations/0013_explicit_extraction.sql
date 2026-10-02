@@ -1,0 +1,3 @@
+-- Preserve originals and stop unrequested legacy ingestion jobs.
+UPDATE jobs SET state='blocked',error_code='extraction_required',dispatched_at=NULL,lease_token=NULL WHERE state IN ('pending','running','blocked') AND NOT EXISTS(SELECT 1 FROM explicit_ai_actions a WHERE a.kind='extract' AND a.target_id=jobs.capture_id AND a.version=jobs.version);
+UPDATE import_jobs SET state='ready',error_code='extraction_required',dispatched_at=NULL,lease_token=NULL WHERE state IN ('pending','running') AND NOT EXISTS(SELECT 1 FROM explicit_ai_actions a WHERE a.kind='extract_import' AND a.target_id=import_jobs.id);
