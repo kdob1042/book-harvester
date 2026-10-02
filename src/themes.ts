@@ -143,12 +143,12 @@ export async function editTheme(env:Env,themeId:string,input:Record<string,unkno
 export async function deleteTheme(env:Env,themeId:string,input:Record<string,unknown>){
  const t=await stmt(env,"SELECT * FROM themes WHERE id=? AND state='active' AND merged_into IS NULL",themeId).first<Theme>();if(!t||t.version!==Number(input.version))fail(409,'問いが更新されています。');
  const group=await rows<{original_id:string}>(env,'SELECT original_id FROM canonical_question_ids WHERE id=?',themeId),ids=[...new Set(group.map(x=>x.original_id).concat(themeId))];
- const placeholders=ids.map(()=>'?').join(','),before=JSON.stringify({theme:t,identity_ids:ids});
+ const placeholders=ids.map(()=>'?').join(','),before=JSON.stringify({theme:t,identity_ids:ids}),guard="EXISTS(SELECT 1 FROM themes WHERE id=? AND version=? AND state='active')",values=[themeId,t.version];
  const statements=[
   stmt(env,`INSERT INTO theme_history SELECT ?,?,'delete','本人による問いの削除',?,? WHERE EXISTS(SELECT 1 FROM themes WHERE id=? AND version=? AND state='active')`,id(),themeId,before,now(),themeId,t.version),
-  stmt(env,`DELETE FROM question_relations WHERE parent_id IN (${placeholders}) OR child_id IN (${placeholders})`,...ids,...ids),
-  stmt(env,`DELETE FROM question_oppositions WHERE left_id IN (${placeholders}) OR right_id IN (${placeholders})`,...ids,...ids),
-  stmt(env,`UPDATE themes SET state='deleted',merged_into=NULL,version=version+1 WHERE id IN (${placeholders})`,...ids)
+  stmt(env,`DELETE FROM question_relations WHERE (parent_id IN (${placeholders}) OR child_id IN (${placeholders})) AND ${guard}`,...ids,...ids,...values),
+  stmt(env,`DELETE FROM question_oppositions WHERE (left_id IN (${placeholders}) OR right_id IN (${placeholders})) AND ${guard}`,...ids,...ids,...values),
+  stmt(env,`UPDATE themes SET state='deleted',merged_into=NULL,version=version+1 WHERE id IN (${placeholders}) AND ${guard}`,...ids,...values)
  ];
  const saved=await env.DB.batch(statements);if(!saved[0].meta.changes)fail(409,'問いが更新されています。');return {ok:true,deleted_ids:ids};
 }

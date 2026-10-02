@@ -374,10 +374,10 @@ export default {
   try{return headers(await route(request,env,ctx),env);}
   catch(e){
    const message=e instanceof HttpError?e.message:e instanceof AiError?(e.code==='daily_limit'?'今日のAI利用上限に達しました。':e.code==='ai_not_configured'?'AIの設定が必要です。':'資料について回答できませんでした。'):'操作を完了できませんでした。原資料を残したまま、もう一度お試しください。';
-   return headers(json({error:message},e instanceof HttpError?e.status:e instanceof AiError?503:500),env);
+   const aiMessage=e instanceof AiError?(e.code==='subscription_reauth_required'?'ChatGPTへの再接続が必要です。':e.code==='subscription_sharing_usage_limit_exceeded'?'ChatGPTの利用上限に達しました。':`AI処理に失敗しました（${e.code}）。もう一度お試しください。`):message;
+   return headers(json({error:e instanceof AiError&&!['daily_limit','ai_not_configured'].includes(e.code)?aiMessage:message,...e instanceof AiError?{error_code:e.code,retryable:e.retryable}:{}},e instanceof HttpError?e.status:e instanceof AiError?503:500),env);
   }
  },
  async scheduled(_event,env){await dispatch(env);await cleanup(env);},
  async queue(batch,env){await consume(batch,env);},
 } satisfies ExportedHandler<Env>;
-
