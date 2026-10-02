@@ -31,6 +31,7 @@ export function buildConnections(index, details = new Map(), captures = new Map(
     if (drilldown) addEdge({ ...endpoints, kind: 'drilldown' });
     if (!input && !drilldown) addEdge({ ...endpoints, kind: 'hierarchy' });
   }
+  for (const pair of list(index?.oppositions)) addEdge({from:keyFor('theme',pair.left_id),to:keyFor('theme',pair.right_id),kind:'opposes'});
   for (const [themeId, detail] of details) {
     const parent = keyFor('theme', themeId);
     if (!nodes.has(parent) || !detail?.theme || detail.redirect) continue;
@@ -85,7 +86,7 @@ export function layoutConnections(graph) {
   for (const id of nodes.keys()) { parents.set(id, new Set()); children.set(id, new Set()); neighbours.set(id, new Set()); }
   for (const e of graph.edges) {
     if (!nodes.has(e.from) || !nodes.has(e.to) || e.from === e.to) continue;
-    children.get(e.from).add(e.to); parents.get(e.to).add(e.from);
+    if(e.kind!=='opposes'){children.get(e.from).add(e.to); parents.get(e.to).add(e.from);}
     neighbours.get(e.from).add(e.to); neighbours.get(e.to).add(e.from);
   }
   const pending = new Map([...children].map(([id, c]) => [id, c.size])), rank = new Map();

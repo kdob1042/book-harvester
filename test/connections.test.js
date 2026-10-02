@@ -145,3 +145,8 @@ test('detail distinguishes integration from drilldown in either direction', () =
   const child = { theme: { id: 'seed' }, drilldown_parents: [{ id: 'root' }] };
   assert.equal(buildConnections(index, new Map([['seed', child]])).edges.find(e => e.to === 'theme:seed').kind, 'drilldown');
 });
+
+test('opposition is a saved undirected neighbour, not a parent/child rank',()=>{
+ const graph=buildConnections({themes:[{id:'a',question:'インフレ'},{id:'b',question:'デフレ'}],oppositions:[{left_id:'a',right_id:'b'}]});
+ assert.equal(graph.edges[0].kind,'opposes');const layout=layoutConnections(graph);assert.equal(layout.positions.get('theme:a').y,layout.positions.get('theme:b').y);assert.equal(layout.cyclic.size,0);assert.equal(visibleConnections(graph,'インフレ').nodes.length,2);
+});
