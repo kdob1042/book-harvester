@@ -1,7 +1,7 @@
 import {questionContext} from './question-context.ts';
 import {stmt,rows,fail,digest,type Harvest} from './core.ts';
 
-export type Material={question?:ReturnType<typeof questionContext>;kind?:string;revision_id?:string;dependencies?:Material[];id:string;version:number;text:string;title:string;domain_ids:string[];lens_ids:string[];fingerprint:string;harvest:string;near?:boolean;relation?:string;reason?:string};
+export type Material={question?:ReturnType<typeof questionContext>;kind?:string;revision_id?:string;dependencies?:Material[];id:string;version:number;text:string;title:string;domain_ids:string[];lens_ids:string[];fingerprint:string;harvest:string;near?:boolean;relation?:string;reason?:string;search_direction?:string;linked?:boolean};
 type LegacyClassification = {domains:Map<string,string[]>;lenses:Map<string,string[]>};
 export async function material(env:Env, c:any, legacy?:LegacyClassification):Promise<Material> {
  const harvest = c.harvest as Harvest;

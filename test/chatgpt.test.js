@@ -24,7 +24,7 @@ test('subscription discovery and drilldown consume streamed JSON before sparse c
  const f=await fixture();t.after(f.close);f.env.AI_AUTH_MODE='chatgpt';f.env.CHATGPT_SESSION=JSON.stringify(seed());
  const provider=async(_,options)=>{
   const body=JSON.parse(options.body),input=JSON.parse(body.input[0].content[0].text);
-  const value=body.text.format.name==='question_drilldown_v1'?{candidates:[{question:'条件は何か？',content:'条件を比較',reason:'境界の検証',target:'selected',opposite_id:null},{question:'反例はあるか？',content:'反例を比較',reason:'仮説の検証',target:'selected',opposite_id:null}]}:{candidates:[],destination:{theme_id:input.anchor.id,question:input.anchor.title,scope:'対象の条件',exclusions:'',content:null}};
+  const value=body.text.format.name==='discovery_search_plan_v1'?{queries:[]}:body.text.format.name==='question_drilldown_v1'?{candidates:[{question:'条件は何か？',content:'条件を比較',reason:'境界の検証',target:'selected',opposite_id:null},{question:'反例はあるか？',content:'反例を比較',reason:'仮説の検証',target:'selected',opposite_id:null}]}:{candidates:[],destination:{theme_id:input.anchor.id,question:input.anchor.title,scope:'対象の条件',exclusions:'',content:null}};
   return stream([{type:'response.output_text.delta',output_index:0,content_index:0,delta:JSON.stringify(value)},{type:'response.output_item.done',output_index:0,item:{id:'msg_1',type:'message',status:'completed',content:[{type:'output_text',text:JSON.stringify(value)}]}},{type:'response.completed',response:{status:'completed',output:null}}]);
  };
  const run=await discoverRecords(f.env,{id:'theme:work',version:1,idempotency_key:'sse-discovery-regression'},provider);assert.equal(run.state,'completed');
