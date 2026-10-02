@@ -12,7 +12,7 @@ import {rows,stmt,fail,digest} from './core.ts';
 import {toolSpecs} from './mcp-tools.ts';
 async function executeBook(env:Env,ctx:ExecutionContext,name:string,a:Record<string,unknown>) {
   if(!toolSpecs.some(s=>s[0]===name))fail(404,'unknown_tool');
-  if(name==='get_status')return {capabilities:{records:true,views:true,research:true,themes:true,attachments:true,analysis_drafts:true,explicit_discovery:true,explicit_synthesis:true,export:true},ai_policy:automaticAI(env)?'automatic_legacy':'ingestion_and_explicit_actions',stages:await jobStages(env),jobs:await rows(env,'SELECT state,count(*) AS count FROM jobs GROUP BY state')};
+  if(name==='get_status')return {capabilities:{records:true,views:true,research:true,themes:true,attachments:true,analysis_drafts:true,explicit_discovery:true,explicit_synthesis:true,export:true},ai_policy:automaticAI(env)?'automatic_legacy':'explicit_only',stages:await jobStages(env),jobs:await rows(env,'SELECT state,count(*) AS count FROM jobs GROUP BY state')};
   if(name==='get_overview')return overview(env,a);
   if(name==='get_evidence')return recordEvidence(env,a);
   if(name==='get_history')return history(env,a);
