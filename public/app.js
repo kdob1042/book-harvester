@@ -75,7 +75,7 @@ async function home() {
   const next = await api(searchPath());
   state = next; currentCapture = null; currentView = null;
   app.innerHTML = `${header()}<section class="intro"><p class="eyebrow">READ · LEAVE · THINK</p>
-    <h1>残したもの。</h1><p>${state.current_source ? `${esc(state.current_source.title)}<br>前回の本を引き継ぎます。表紙を残すと、本も切り替わります。` : '気になったページを、一枚。<br>整理はあとから、自然に。'}</p></section><section id="feed"></section>`;
+    <h1>理解を育てる。</h1><p>${state.current_source ? `${esc(state.current_source.title)}<br>前回の本を引き継ぎます。表紙を残すと、本も切り替わります。` : '本の一節も、自分の気づきも。<br>記録から、同じ問いの理解が育ちます。'}</p></section><section id="feed"></section>`;
   app.removeAttribute('aria-busy'); wireHeader(); renderFeed();
   cacheRecent(state).catch(()=>{});
 }
@@ -85,7 +85,7 @@ function renderFeed() {
   const captures = state.captures;
   const deviceInfo=state.device&&(state.device.offline||state.device.pending||state.device.other_scope)?`<p class="subtle">${state.device.offline?'オフライン · 端末の読書キャッシュ':''} ${state.device.pending?`端末に保存・未送信 ${state.device.pending}件`:''} ${state.device.conflicts?`競合 ${state.device.conflicts}件`:''}${state.device.other_scope?' 別の保存先の未送信データは自動送信しません。':''} <button class="quiet" id="device-pending">保存状況を読む</button></p>`:'';
   const searchInfo=query?`<p class="subtle">${state.search_state==='semantic'?'言葉の一致と意味の近さから候補を探しています。意味の検索は索引のある最新1,000件が対象です。根拠は原資料で確認できます。':'言葉の一致から検索しています。意味の索引は設定・処理待ちです。'}</p>`:'';
-  $('#feed').innerHTML = `${deviceInfo}${searchInfo}${(state.reflections||[]).map(r=>`<button class="capture-row" data-reflection="${r.id}"><span class="row-meta">${({session:'この区切りの持ち帰り · 記録から推定',day:'一日の振り返り',week:'一週間の振り返り'})[r.scope]}</span><h2>${esc(r.result.summary)}</h2></button>`).join('')}${(state.revisits||[]).map(r=>`<button class="capture-row" data-capture="${r.id}"><span class="row-meta">以前の問いとの再会</span><h2>${esc(r.question)}</h2><p class="subtle">${esc(r.reason)}</p></button>`).join('')}${(state.imports||[]).length&&!query?`<details class="fold"><summary>取り込み状況</summary>${state.imports.map(i=>`<button class="capture-row" data-import="${i.id}"><span class="row-meta">${esc(importState(i.state))}</span>${esc(i.name)}</button>`).join('')}</details>`:''}${(state.research||[]).length&&!query?`<details class="fold"><summary>調査の続きを見る</summary>${state.research.map(r=>`<button class="capture-row" data-research="${r.id}"><span class="row-meta">${esc(researchState(r.state))}</span>${esc(r.question)}</button>`).join('')}</details>`:''}${captures.length ? '<p class="section-label">記録からの知見</p>' : ''}${captures.map(c => {
+  $('#feed').innerHTML = `${deviceInfo}${searchInfo}${!query&&!state.filter_active?themeHome(state.theme_index):''}${(state.reflections||[]).map(r=>`<button class="capture-row" data-reflection="${r.id}"><span class="row-meta">${({session:'この区切りの持ち帰り · 記録から推定',day:'一日の振り返り',week:'一週間の振り返り'})[r.scope]}</span><h2>${esc(r.result.summary)}</h2></button>`).join('')}${(state.revisits||[]).map(r=>`<button class="capture-row" data-capture="${r.id}"><span class="row-meta">以前の問いとの再会</span><h2>${esc(r.question)}</h2><p class="subtle">${esc(r.reason)}</p></button>`).join('')}${(state.imports||[]).length&&!query?`<details class="fold"><summary>取り込み状況</summary>${state.imports.map(i=>`<button class="capture-row" data-import="${i.id}"><span class="row-meta">${esc(importState(i.state))}</span>${esc(i.name)}</button>`).join('')}</details>`:''}${(state.research||[]).length&&!query?`<details class="fold"><summary>調査の続きを見る</summary>${state.research.map(r=>`<button class="capture-row" data-research="${r.id}"><span class="row-meta">${esc(researchState(r.state))}</span>${esc(r.question)}</button>`).join('')}</details>`:''}${captures.length ? '<p class="section-label">記録からの知見</p>' : ''}${captures.map(c => {
     const summary = c.harvest?.summary || c.original_preview || (c.kind === 'image' ? '残したページ' : '残した音声');
     const label = c.local_only?(c.local_conflict?'端末に保存・送信できませんでした':'端末に保存・接続後に自動送信'):statusLabel(c);
     const locator = c.page ? ` · ${c.locator_certainty === 'inferred' ? '推定 ' : ''}p.${esc(c.page)}` : '';
@@ -93,6 +93,7 @@ function renderFeed() {
       <h2>${esc(summary)}</h2>${label ? `<span class="status ${esc(c.state)}">${esc(label)}</span>` : `<p class="question-preview">${esc(c.harvest?.questions[0]?.text || '原資料と、考えの続きを読む。')}</p>`}</button>`;
   }).join('')}${!captures.length ? `<div class="empty"><img class="empty-symbol" src="/favicon.svg" alt=""><h2>${query ? 'その言葉は、まだ見つかりません。' : '最初の一枚から、育っていきます。'}</h2><p>${query ? '別の言葉で探してみてください。' : '書名も、ページ番号も、タグも不要です。<br>写真を残したら、本の続きへ。'}</p></div>` : ''}
     ${state.views.length && !query && !state.filter_active ? `<p class="section-label">自分の見方</p>${state.views.map(v => `<button class="view-row" data-view="${v.id}"><span class="row-meta">自分の見方 · 第${v.version}版</span><h2>${esc(v.body)}</h2></button>`).join('')}` : ''}`;
+  wireThemeLinks();
   bind('#device-pending','click',devicePendingDialog);
   document.querySelectorAll('[data-capture]').forEach(el => el.addEventListener('click', () => openCapture(el.dataset.capture).catch(e => showNotice(e.message))));
   document.querySelectorAll('[data-import]').forEach(el=>el.addEventListener('click',()=>openImport(el.dataset.import).catch(e=>showNotice(e.message))));
@@ -254,6 +255,7 @@ function renderCapture() {
     <h1>${esc(h?.summary || '原資料を残しました。')}</h1>${label ? `<p class="status ${esc(c.job?.state)}">${esc(label)}</p>` : ''}
     ${c.pending_edit?'<p class="subtle">端末の訂正は未送信です。知見は保存先の前の版を表示しています。</p>':''}${c.from_cache?'<p class="subtle">端末に残した資料です。接続時に更新します。</p>':''}${c.local_only?`<p class="subtle">${c.local_conflict?'端末の原資料は残っています。保存状況から失敗内容を確認できます。':'端末の原資料を保存しました。接続後に自動送信・知見化します。'}</p>${c.local_error?`<p class="error">${esc(c.local_error)}</p>`:''}`:''}
     ${['failed','blocked'].includes(c.job?.state) ? `<p class="subtle">${esc(errors[c.job.error_code] || '原資料は残っています。詳細から再試行できます。')}</p>` : ''}</div>
+    ${c.themes?.length?`<section class="detail-section"><p class="section-label">この記録が育てる問い</p>${c.themes.map(t=>`<a href="#" data-theme="${esc(t.id)}">${esc(t.question)}</a>`).join('<br>')}</section>`:''}
     ${h?'<details class="fold"><summary>周辺のつながりを読む・概念を整理する</summary><button id="open-neighborhood" class="quiet">この知見の周辺を開く</button></details>':''}
     ${h?'<details class="fold"><summary>問いを外部資料で確かめる</summary><button id="research-start" class="quiet">調べる</button></details>':''}
     ${h ? `<section class="detail-section"><h2>拾った知見</h2>${h.claims.map(claim => `<div class="knowledge-item"><p><span class="origin">${({ source:'資料の主張', user:'自分の発言', ai:'AIの推論' })[claim.evidence.origin]} · ${({ explicit:'記録あり', inferred:'推論', uncertain:'不確か' })[claim.evidence.certainty]}</span></p>
@@ -276,7 +278,7 @@ function renderCapture() {
       ${c.source_published_at || c.source_subject_period ? `<p class="subtle">${c.source_published_at ? `公開・発行時期：${esc(c.source_published_at)}` : ''}${c.source_subject_period ? `<br>内容の対象時期：${esc(c.source_subject_period)}` : ''}</p>` : ''}</details>
     <details class="fold"><summary>訂正・補足など</summary><div class="secondary-links"><button id="correct">読み取り・出典を訂正</button><button id="supplement">写真・音声を補足</button>
       ${h ? '<button id="ask">この資料について聞く</button><button id="hide-revisit">再訪候補に表示しない</button>' : ''}${['failed','blocked'].includes(c.job?.state) ? '<button id="retry">読み取りを再試行</button>' : ''}<button id="delete" class="danger">この記録を削除</button></div></details></article>`;
-  wireHeader(); bind('#back', 'click', () => home().catch(e => showNotice(e.message)));
+  wireHeader(); wireThemeLinks(); bind('#back', 'click', () => home().catch(e => showNotice(e.message)));
   bind('#adopt', 'click', async event => {
     event.target.disabled = true;
     try { await api(`/api/captures/${c.id}/adopt`, json('POST', { version:c.version })); await openCapture(c.id); showNotice('自分の見方に残しました。'); }
@@ -476,3 +478,29 @@ window.addEventListener('device-sync',async()=>{if(!state||dialog.open||uploadin
 initDevice().then(()=>resume()).catch(e=>showNotice(e.message));
 
 
+
+function themeHome(index){
+ if(!index)return '';
+ const themes=index.themes||[],domains=index.domains||[];
+ return `<section class="theme-home" aria-label="育てている問い"><p class="section-label">育てている問い</p>${domains.map(d=>{const list=themes.filter(t=>JSON.parse(t.domain_ids||'[]').includes(d.id));return `<section class="theme-domain"><h2>${esc(d.name)}</h2>${list.map(t=>{const r=t.result?JSON.parse(t.result):null;return `<button class="capture-row theme-row" data-theme="${esc(t.id)}"><h3>${esc(t.question)}</h3><p>${esc(t.stale?'原根拠が変わったため、理解を更新しています。':r?.understanding[0]?.text||(t.material_count?'材料をもとに理解を整理しています。':'これから材料を集める問いです。'))}</p>${!t.stale&&r?.changed&&r?.change_reason?`<p class="subtle">今回の変化 · ${esc(r.change_reason)}</p>`:''}${['failed','blocked'].includes(t.job_state)?'<p class="subtle">整理は保留中です。保存した材料と以前の理解は読めます。</p>':''}</button>`;}).join('')}</section>`;}).join('')}</section>`;
+}
+function wireThemeLinks(){document.querySelectorAll('[data-theme]').forEach(el=>el.onclick=event=>{event.preventDefault();openTheme(el.dataset.theme).catch(e=>showNotice(e.message));});}
+async function openTheme(themeId,fromCapture=null){
+ const t=await api(`/api/themes/${encodeURIComponent(themeId)}`);if(t.redirect)return openTheme(t.redirect,fromCapture);
+ currentCapture=null;currentView={id:themeId,theme:true};
+ const r=t.result;
+ const sections=[['understanding','現在の暫定理解'],['changes','最近起きている変化'],['competing','競合する説明'],['conditions','成立条件と反例'],['questions','次に確かめたい問い']];
+ const proof=e=>{const p=t.evidence.find(p=>p.claim_id===e.claim_id);return p?`<blockquote>${esc(p.quote||'AIの推論・原文引用なし')}<p class="subtle">${esc(({source:'資料の主張',user:'本人の発言',ai:'AIの推論'})[p.origin])} · ${esc(p.source_title||'出典未確認')}${p.page?` · p.${esc(p.page)}`:''} · ${esc(({support:'説明の支持',counterexample:'反例',condition:'条件追加',example:'具体例',background:'背景',unresolved:'未解決'})[e.role])}</p><a href="#" data-theme-source="${esc(p.capture_id)}">原記録を読む</a></blockquote>`:'';};
+ app.innerHTML=`${header()}<nav class="theme-nav"><button id="back" class="back">← 育てている問い</button>${fromCapture?'<button id="theme-origin-back" class="back">← 元の記録</button>':''}</nav><article><div class="detail-head"><p class="eyebrow">AIが整理した理解${t.revision?` · 第${t.revision}版`:''}</p><h1>${esc(t.theme.question)}</h1><p class="subtle">${esc(t.theme.scope)}</p>${t.stale?'<p class="status">原根拠が変更・削除されています。以下は更新前の理解です。有効な引用だけを表示しています。</p>':''}${t.job&&['failed','blocked'].includes(t.job.state)?`<p class="subtle">${esc(errors[t.job.error_code]||'整理を完了できませんでした。原資料と以前の理解は保存されています。')}</p>`:''}</div>
+ ${r?sections.map(([key,label])=>r[key].length?`<section class="detail-section"><h2>${label}</h2>${r[key].map(e=>`<p class="prose">${esc(e.text)}</p><p class="subtle">${e.interpretation==='ai'?'AIの仮説・整理':e.interpretation==='user'?'本人の発言':'資料が述べる説明'}${e.period?` · 対象時期 ${esc(e.period)}`:''}</p><details class="fold"><summary>根拠を読む</summary>${e.evidence.map(proof).join('')||'<p>現時点で有効な原根拠を確認できません。</p>'}</details>`).join('')}</section>`:'').join(''):'<section class="detail-section"><p>まだ統合知見はありません。記録すると、関係する材料が自動で集まります。</p></section>'}
+ ${r?.changed&&r?.change_reason?`<section class="detail-section"><h2>今回の理解の変化</h2><p>${esc(r.change_reason)}</p></section>`:''}
+ ${t.history.length?`<details class="fold"><summary>理解が変わった理由</summary>${t.history.map(h=>`<p>第${h.version}版 · ${date(h.created_at)}<br>${esc(h.change_reason)}</p>`).join('')}</details>`:''}
+ ${t.relations.length?`<section class="detail-section"><h2>ほかの問いとのつながり</h2>${t.relations.map(x=>{const p=JSON.parse(x.payload);return `<p>${esc(p.common_structure)}</p><p class="subtle">違い：${esc(p.important_difference)}</p><a href="#" data-theme="${esc(x.to_theme)}">つながるテーマを読む</a>`;}).join('')}</section>`:''}
+ ${t.proposals.length?`<details class="fold"><summary>自分の見方への案</summary><p class="subtle">採用したときだけ、自分の見方に保存します。</p>${t.proposals.map(p=>`<p class="prose">${esc(p.to_text)}</p><p>${esc(p.reason)}</p><button class="quiet" data-theme-adopt="${p.id}">この見方を採用する</button><button class="quiet" data-theme-hide="${p.id}">この案を表示しない</button>`).join('')}</details>`:''}
+ ${t.views.length?`<section class="detail-section"><h2>自分が採用した見方</h2>${t.views.map(v=>`<a href="#" data-theme-view="${v.id}">${esc(v.body)}</a>`).join('<br>')}</section>`:''}
+ <details class="fold"><summary>この問いに集まった記録</summary>${t.materials.map(m=>`<p>${esc(m.reason)}<br><a href="#" data-theme-source="${m.capture_id}">原記録を読む</a></p>`).join('')||'<p>まだ関連する記録はありません。</p>'}</details></article>`;
+ wireHeader();wireThemeLinks();bind('#back','click',()=>home().catch(e=>showNotice(e.message)));bind('#theme-origin-back','click',()=>openCapture(fromCapture));
+ document.querySelectorAll('[data-theme-source]').forEach(el=>el.onclick=async event=>{event.preventDefault();await openCapture(el.dataset.themeSource);const parent=document.createElement('button');parent.className='back';parent.textContent='← この根拠を使うテーマ';parent.onclick=()=>openTheme(themeId,currentCapture?.id);$('#back').after(parent);});
+ document.querySelectorAll('[data-theme-view]').forEach(el=>el.onclick=event=>{event.preventDefault();openView(el.dataset.themeView).catch(e=>showNotice(e.message));});
+ for(const action of ['adopt','hide'])document.querySelectorAll(`[data-theme-${action}]`).forEach(el=>el.onclick=async()=>{el.disabled=true;try{await api(`/api/themes/${encodeURIComponent(themeId)}/proposals`,json('POST',{action,proposal_id:el.dataset[action==='adopt'?'themeAdopt':'themeHide']}));await openTheme(themeId);}catch(e){showNotice(e.message);el.disabled=false;}});
+}

@@ -1,3 +1,4 @@
+import {membershipJobStatement,dispatchThemes,processThemeJob} from './themes.ts';
 import {aiConfigured} from './chatgpt.ts';
 import {scheduleEmbedding,dispatchEmbeddings,processEmbedding} from './semantic.ts';
 import {dispatchResearch,processResearch} from './research.ts';
@@ -27,6 +28,7 @@ export async function dispatch(env:Env) {
  await dispatchImports(env);
  await dispatchBibliography(env);
  await dispatchResearch(env);
+ await dispatchThemes(env);
 }
 
 export async function processJob(env:Env,jobId:string,fetcher?:typeof fetch) {
@@ -61,6 +63,7 @@ export async function processJob(env:Env,jobId:string,fetcher?:typeof fetch) {
   }
   statements.push(stmt(env,`UPDATE captures SET page=?,chapter=?,locator_certainty=? WHERE id=? AND source_locked=0 AND ${guard}`,source.page,source.chapter,source.certainty,capture.id,job.id,token));
   statements.push(graphJobStatement(env,capture.id,job.version,guard,[job.id,token]));
+  statements.push(membershipJobStatement(env,capture.id,job.version,guard,[job.id,token]));
   statements.push(stmt(env,`UPDATE jobs SET state=CASE WHEN version=(SELECT version FROM captures WHERE id=?) THEN 'completed' ELSE 'superseded' END,
    error_code=NULL,input_tokens=?,output_tokens=?,finished_at=?,lease_token=NULL WHERE id=? AND state='running' AND lease_token=?`,capture.id,output.usage.input_tokens||0,output.usage.output_tokens||0,now(),job.id,token));
   await env.DB.batch(statements);
@@ -69,6 +72,7 @@ export async function processJob(env:Env,jobId:string,fetcher?:typeof fetch) {
   await scheduleEmbedding(env,capture.id,job.version);
   await dispatchEmbeddings(env);
   await dispatchGraph(env);
+  await dispatchThemes(env);
  }catch(e){
   const safe=e instanceof AiError?e:new AiError('processing_failed'),blocked=['ai_not_configured','daily_limit','subscription_reauth_required','subscription_sharing_usage_limit_exceeded','subscription_audio_unsupported'].includes(safe.code);
   const next=blocked?'blocked':safe.retryable&&job.attempts<3?'pending':'failed';
@@ -99,6 +103,7 @@ export async function consume(batch:MessageBatch<unknown>,env:Env){
    if(body&&typeof body==='object'&&'bibliography_capture_id' in body&&typeof body.bibliography_capture_id==='string')await processBibliography(env,body.bibliography_capture_id);
    if(body&&typeof body==='object'&&'research_id' in body&&typeof body.research_id==='string')await processResearch(env,body.research_id);
    if(body&&typeof body==='object'&&'embedding_capture_id' in body&&typeof body.embedding_capture_id==='string')await processEmbedding(env,body.embedding_capture_id);
+   if(body&&typeof body==='object'&&'theme_job_id' in body&&typeof body.theme_job_id==='string')await processThemeJob(env,body.theme_job_id);
    message.ack();
   }
   catch{message.retry({delaySeconds:60});}

@@ -27,7 +27,7 @@ test('audio uses separate transcription and Responses contracts; original speech
  const f=await fixture();t.after(f.close);await f.login();const captureId=await save(f,audio());const seen=[];
  await f.drain(async (url,opts)=>{seen.push(url);if(url.endsWith('transcriptions')){assert.ok(opts.body instanceof FormData);assert.equal(opts.body.get('model'),'gpt-4o-mini-transcribe');}
  else{const input=JSON.parse(opts.body);assert.equal(input.store,false);assert.equal(input.text.format.type,'json_schema');assert.equal(input.text.format.strict,true);if(input.text.format.name==='capture_harvest_v1')assert.ok(input.input[0].content[0].text.includes(sentence));else assert.ok(input.input.includes(sentence));}return mockAi(url,opts);});
- assert.equal(seen.length,3);assert.ok(seen[0].endsWith('/audio/transcriptions'));assert.ok(seen[1].endsWith('/responses'));
+ assert.equal(seen.length,4);assert.ok(seen[0].endsWith('/audio/transcriptions'));assert.ok(seen[1].endsWith('/responses'));
  const c=await (await f.request(`/api/captures/${captureId}`)).json();assert.equal(c.job.state,'completed');assert.equal(c.assets[0].mime,'audio/wav');assert.equal(c.job.transcript.trim(),sentence);
 });
 
@@ -89,5 +89,5 @@ test('source deletion removes originals and AI derivatives while adopted text/hi
  const f=await fixture();t.after(f.close);await f.login();const captureId=await save(f);await f.drain();await f.request(`/api/captures/${captureId}/adopt`,json('POST',{version:1}));
  assert.equal((await f.request(`/api/captures/${captureId}`,json('DELETE',{version:1}))).status,200);
  for(const table of ['captures','assets','jobs','harvests','capture_revisions','sources','graph_jobs','graph_generations','graph_nodes','concepts'])assert.equal(f.db.prepare(`SELECT count(*) AS n FROM ${table}`).get().n,0,table);
- assert.equal(f.db.prepare('SELECT count(*) AS n FROM views').get().n,1);assert.equal(f.db.prepare('SELECT count(*) AS n FROM view_revisions').get().n,1);assert.equal(f.objects.size,0);assert.equal(f.db.prepare('SELECT calls FROM ai_daily').get().calls,3); // Harvest, graph, and semantic index.
+ assert.equal(f.db.prepare('SELECT count(*) AS n FROM views').get().n,1);assert.equal(f.db.prepare('SELECT count(*) AS n FROM view_revisions').get().n,1);assert.equal(f.objects.size,0);assert.equal(f.db.prepare('SELECT calls FROM ai_daily').get().calls,4); // Harvest, graph, semantic index, and theme membership.
 });

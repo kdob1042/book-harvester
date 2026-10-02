@@ -1,0 +1,61 @@
+CREATE TABLE domains(id TEXT PRIMARY KEY,name TEXT NOT NULL,scope TEXT NOT NULL,position INTEGER NOT NULL);
+CREATE TABLE lenses(id TEXT PRIMARY KEY,name TEXT NOT NULL,definition TEXT NOT NULL,question TEXT NOT NULL,exclusions TEXT NOT NULL);
+CREATE TABLE themes(id TEXT PRIMARY KEY,question TEXT NOT NULL,scope TEXT NOT NULL,exclusions TEXT NOT NULL,aliases TEXT NOT NULL DEFAULT '[]',state TEXT NOT NULL DEFAULT 'active',version INTEGER NOT NULL DEFAULT 1,created_by TEXT NOT NULL DEFAULT 'seed',merged_into TEXT REFERENCES themes(id),created_at INTEGER NOT NULL);
+CREATE TABLE theme_domains(theme_id TEXT REFERENCES themes(id),domain_id TEXT REFERENCES domains(id),PRIMARY KEY(theme_id,domain_id));
+CREATE TABLE theme_jobs(id TEXT PRIMARY KEY,kind TEXT NOT NULL CHECK(kind IN('membership','synthesis')),target_id TEXT NOT NULL,version INTEGER NOT NULL,state TEXT NOT NULL DEFAULT 'pending',attempts INTEGER NOT NULL DEFAULT 0,available_at INTEGER NOT NULL,dispatched_at INTEGER,lease_token TEXT,lease_until INTEGER,error_code TEXT,created_at INTEGER NOT NULL,UNIQUE(kind,target_id));
+CREATE INDEX theme_jobs_ready ON theme_jobs(state,available_at);
+CREATE TABLE theme_memberships(theme_id TEXT REFERENCES themes(id),capture_id TEXT REFERENCES captures(id) ON DELETE CASCADE,capture_version INTEGER NOT NULL,claim_ids TEXT NOT NULL,reason TEXT NOT NULL,role TEXT NOT NULL,fingerprint TEXT NOT NULL,processing_version TEXT NOT NULL,created_at INTEGER NOT NULL,PRIMARY KEY(theme_id,capture_id));
+CREATE INDEX theme_membership_capture ON theme_memberships(capture_id,capture_version);
+CREATE INDEX theme_member_fingerprint ON theme_memberships(theme_id,fingerprint);
+CREATE TABLE theme_revisions(id TEXT PRIMARY KEY,theme_id TEXT REFERENCES themes(id),version INTEGER NOT NULL,result TEXT NOT NULL,input_snapshot TEXT NOT NULL,input_fingerprint TEXT NOT NULL,processing_version TEXT NOT NULL,model TEXT NOT NULL,changed INTEGER NOT NULL,change_reason TEXT NOT NULL,created_at INTEGER NOT NULL,UNIQUE(theme_id,version));
+CREATE TABLE theme_syntheses(theme_id TEXT PRIMARY KEY REFERENCES themes(id),revision_id TEXT NOT NULL REFERENCES theme_revisions(id),version INTEGER NOT NULL);
+CREATE TABLE synthesis_evidence(revision_id TEXT REFERENCES theme_revisions(id),section_id TEXT NOT NULL,claim_id TEXT NOT NULL,capture_id TEXT NOT NULL,capture_version INTEGER NOT NULL,quote TEXT,origin TEXT NOT NULL,role TEXT NOT NULL,PRIMARY KEY(revision_id,section_id,claim_id));
+CREATE INDEX synthesis_evidence_capture ON synthesis_evidence(capture_id,capture_version);
+CREATE TABLE theme_claim_relations(id TEXT PRIMARY KEY,revision_id TEXT REFERENCES theme_revisions(id),from_id TEXT NOT NULL,to_id TEXT NOT NULL,type TEXT NOT NULL,payload TEXT NOT NULL);
+CREATE TABLE theme_relations(id TEXT PRIMARY KEY,revision_id TEXT REFERENCES theme_revisions(id),from_theme TEXT REFERENCES themes(id),to_theme TEXT REFERENCES themes(id),lens_id TEXT REFERENCES lenses(id),payload TEXT NOT NULL);
+CREATE TABLE theme_view_links(theme_id TEXT REFERENCES themes(id),view_id TEXT REFERENCES views(id),reason TEXT NOT NULL,PRIMARY KEY(theme_id,view_id));
+CREATE TABLE theme_overrides(theme_id TEXT REFERENCES themes(id),item_key TEXT NOT NULL,action TEXT NOT NULL,value TEXT,created_at INTEGER NOT NULL,PRIMARY KEY(theme_id,item_key));
+CREATE TABLE theme_proposals(id TEXT PRIMARY KEY,theme_id TEXT REFERENCES themes(id),revision_id TEXT REFERENCES theme_revisions(id),view_id TEXT REFERENCES views(id),base_version INTEGER,from_text TEXT NOT NULL,to_text TEXT NOT NULL,reason TEXT NOT NULL,references_json TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'pending',created_at INTEGER NOT NULL);
+CREATE TABLE theme_history(id TEXT PRIMARY KEY,theme_id TEXT REFERENCES themes(id),action TEXT NOT NULL,reason TEXT NOT NULL,before_json TEXT NOT NULL,created_at INTEGER NOT NULL);
+CREATE VIEW current_theme_memberships AS SELECT m.* FROM theme_memberships m JOIN captures c ON c.id=m.capture_id AND c.version=m.capture_version JOIN harvests h ON h.capture_id=c.id AND h.version=c.version WHERE NOT EXISTS(SELECT 1 FROM theme_overrides o WHERE o.theme_id=m.theme_id AND o.item_key='capture:'||m.capture_id AND o.action='hidden');
+-- Backfill uses the existing outbox, not user classification or re-reading of original files.
+INSERT INTO theme_jobs(id,kind,target_id,version,available_at,created_at) SELECT lower(hex(randomblob(16))),'membership',c.id,c.version,0,0 FROM captures c JOIN harvests h ON h.capture_id=c.id AND h.version=c.version;
+INSERT OR IGNORE INTO domains VALUES('work','仕事・組織','働く人の役割、専門性、仕事の分担、組織の意思決定',0);
+INSERT OR IGNORE INTO themes(id,question,scope,exclusions,created_at) VALUES('theme:work','専門性の価値は、何によって変わるのか？','働く人の役割、専門性、仕事の分担、組織の意思決定','同じ領域というだけの記録や単なる備忘は含めない',0);
+INSERT OR IGNORE INTO theme_domains VALUES('theme:work','work');
+INSERT OR IGNORE INTO domains VALUES('learning','学び・能力','学習、能力の獲得、記憶と外部への委任',1);
+INSERT OR IGNORE INTO themes(id,question,scope,exclusions,created_at) VALUES('theme:learning','何を自分で身につけ、何を外部に任せるのか？','学習、能力の獲得、記憶と外部への委任','同じ領域というだけの記録や単なる備忘は含めない',0);
+INSERT OR IGNORE INTO theme_domains VALUES('theme:learning','learning');
+INSERT OR IGNORE INTO domains VALUES('creation','創作・娯楽','作品の価値、創作、娯楽の選択と体験',2);
+INSERT OR IGNORE INTO themes(id,question,scope,exclusions,created_at) VALUES('theme:creation','作品や娯楽の価値は、何によって生まれるのか？','作品の価値、創作、娯楽の選択と体験','同じ領域というだけの記録や単なる備忘は含めない',0);
+INSERT OR IGNORE INTO theme_domains VALUES('theme:creation','creation');
+INSERT OR IGNORE INTO domains VALUES('community','人間関係・共同体','信頼、所属、関係の維持',3);
+INSERT OR IGNORE INTO themes(id,question,scope,exclusions,created_at) VALUES('theme:community','つながりや所属は、何によって維持されるのか？','信頼、所属、関係の維持','同じ領域というだけの記録や単なる備忘は含めない',0);
+INSERT OR IGNORE INTO theme_domains VALUES('theme:community','community');
+INSERT OR IGNORE INTO domains VALUES('care','暮らし・ケア','家事、育児、生活、ケアの分担',4);
+INSERT OR IGNORE INTO themes(id,question,scope,exclusions,created_at) VALUES('theme:care','家事・育児・ケアを、誰がどのように担うのか？','家事、育児、生活、ケアの分担','同じ領域というだけの記録や単なる備忘は含めない',0);
+INSERT OR IGNORE INTO theme_domains VALUES('theme:care','care');
+INSERT OR IGNORE INTO domains VALUES('value','経済・分配','価値の生産と対価、希少性、分配',5);
+INSERT OR IGNORE INTO themes(id,question,scope,exclusions,created_at) VALUES('theme:value','価値を生み出すことと、対価を得ることはどう結びつくのか？','価値の生産と対価、希少性、分配','同じ領域というだけの記録や単なる備忘は含めない',0);
+INSERT OR IGNORE INTO theme_domains VALUES('theme:value','value');
+INSERT OR IGNORE INTO lenses VALUES('substitution','代替と補完','置換される役割と新たに必要となる役割を比較','何が置き換わり、何の必要性が増すのか？','語句や型の一致だけでは所属・支持・因果の根拠にならない');
+INSERT OR IGNORE INTO lenses VALUES('constraint','制約の移動','部分的な改善後に全体を制約する箇所を比較','一つの問題が解消すると、次に何が足りなくなるのか？','語句や型の一致だけでは所属・支持・因果の根拠にならない');
+INSERT OR IGNORE INTO lenses VALUES('concentration','集中と分散','資源・権限・役割の配分を比較','資源や意思決定はどこに集まり、分かれるのか？','語句や型の一致だけでは所属・支持・因果の根拠にならない');
+INSERT OR IGNORE INTO lenses VALUES('personalization','標準化と個別化','共通化と個人への適合を比較','共通にする部分と個人に合わせる部分はどう変わるのか？','語句や型の一致だけでは所属・支持・因果の根拠にならない');
+INSERT OR IGNORE INTO lenses VALUES('capture','価値の生産と獲得','価値を作る主体と対価を受け取る主体を比較','価値を作ることと、その対価を得ることはどこで結びつくのか？','語句や型の一致だけでは所属・支持・因果の根拠にならない');
+CREATE TABLE theme_dependencies(revision_id TEXT REFERENCES theme_revisions(id),capture_id TEXT NOT NULL,capture_version INTEGER NOT NULL,PRIMARY KEY(revision_id,capture_id));
+CREATE INDEX theme_dependency_capture ON theme_dependencies(capture_id,capture_version);
+CREATE VIEW current_theme_revisions AS SELECT r.* FROM theme_revisions r JOIN theme_syntheses s ON s.revision_id=r.id WHERE NOT EXISTS(SELECT 1 FROM theme_dependencies d LEFT JOIN captures c ON c.id=d.capture_id WHERE d.revision_id=r.id AND (c.id IS NULL OR c.version<>d.capture_version OR EXISTS(SELECT 1 FROM theme_overrides o WHERE o.theme_id=r.theme_id AND o.item_key='capture:'||d.capture_id AND o.action='hidden')));
+DROP VIEW current_graph_relations;
+CREATE VIEW current_graph_relations AS
+ SELECT r.*,g.capture_id,g.version FROM graph_relations r JOIN current_graph_generations g ON g.id=r.generation_id WHERE EXISTS(SELECT 1 FROM current_graph_nodes WHERE id=r.from_id) AND EXISTS(SELECT 1 FROM current_graph_nodes WHERE id=r.to_id)
+ UNION ALL SELECT r.id,r.revision_id AS generation_id,r.from_id,r.to_id,r.type,r.payload,n.capture_id,n.version FROM theme_claim_relations r JOIN current_theme_revisions t ON t.id=r.revision_id JOIN current_graph_nodes n ON n.id=r.from_id WHERE EXISTS(SELECT 1 FROM current_graph_nodes WHERE id=r.to_id);
+CREATE TRIGGER theme_member_added AFTER INSERT ON theme_memberships BEGIN
+ INSERT INTO theme_jobs(id,kind,target_id,version,available_at,created_at) VALUES(lower(hex(randomblob(16))),'synthesis',NEW.theme_id,1,unixepoch('now')*1000+15000,unixepoch('now')*1000) ON CONFLICT(kind,target_id) DO UPDATE SET version=version+1,state=CASE WHEN state='running' THEN 'running' ELSE 'pending' END,attempts=CASE WHEN state='running' THEN attempts ELSE 0 END,available_at=excluded.available_at,dispatched_at=NULL,error_code=NULL;
+END;
+CREATE TRIGGER theme_member_removed AFTER DELETE ON theme_memberships BEGIN
+ INSERT INTO theme_jobs(id,kind,target_id,version,available_at,created_at) VALUES(lower(hex(randomblob(16))),'synthesis',OLD.theme_id,1,unixepoch('now')*1000+15000,unixepoch('now')*1000) ON CONFLICT(kind,target_id) DO UPDATE SET version=version+1,state=CASE WHEN state='running' THEN 'running' ELSE 'pending' END,attempts=CASE WHEN state='running' THEN attempts ELSE 0 END,available_at=excluded.available_at,dispatched_at=NULL,error_code=NULL;
+END;
+CREATE TRIGGER theme_capture_deleted AFTER DELETE ON captures BEGIN DELETE FROM theme_jobs WHERE kind='membership' AND target_id=OLD.id; END;
+CREATE TABLE theme_member_lenses(theme_id TEXT NOT NULL,capture_id TEXT NOT NULL,lens_id TEXT REFERENCES lenses(id),PRIMARY KEY(theme_id,capture_id,lens_id),FOREIGN KEY(theme_id,capture_id) REFERENCES theme_memberships(theme_id,capture_id) ON DELETE CASCADE);
+CREATE INDEX theme_member_lens_lookup ON theme_member_lenses(lens_id,theme_id);

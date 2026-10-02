@@ -140,3 +140,11 @@ Harvestの成功と同じD1バッチで横断整理ジョブを登録する。�
 - [Cloudflare R2 PDF/unpdf tutorial](https://developers.cloudflare.com/r2/tutorials/summarize-pdf/)
 - [Open Library Search API](https://openlibrary.org/dev/docs/api/search)
 - [MDN IndexedDB](https://developer.mozilla.org/en-US/docs/Web/API/IndexedDB_API/Using_IndexedDB)
+
+## テーマごとに理解を育てる（#14〜#19）
+
+ホームは6領域の継続的な問いを入口にする。記録後、AIが既存テーマに根拠付きで接続し、
+同じテーマの説明・条件・反例・未解決の問いを更新する。新しい記録で過去同士の関係も再検討する。
+分類・生成開始・全件承認は不要。本人の見方は明示採用時だけ変わる。
+既存Harvestは0009の移行ジョブから自動接続する。原画像・音声の再読解は行わない。
+処理状況・停止/再開・上限・検証範囲は [テーマ機能の検証記録](docs/theme-verification.md) を参照。

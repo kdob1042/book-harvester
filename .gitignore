@@ -8,3 +8,5 @@ node_modules/
 test-results/
 *.sqlite*
 *.backup
+dist-connector/
+src/connector.generated.ts
