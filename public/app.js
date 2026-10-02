@@ -97,8 +97,28 @@ async function refreshAiActivity(){
   catch{/* Advisory only: normal requests surface connectivity errors. */}
   finally{aiPollBusy=false;}
 }
+function confirmAiExecution(descriptor){
+  return new Promise(resolve=>{
+    const previousFocus=document.activeElement;
+    const confirmation=document.createElement('dialog');
+    confirmation.className='ai-confirmation';
+    confirmation.setAttribute('aria-labelledby','ai-confirmation-title');
+    confirmation.innerHTML=`<h2 id="ai-confirmation-title">AIを実行しますか？</h2><p>${esc(descriptor.label)}</p><div class="ai-confirmation-actions"><button type="button" class="quiet" data-no>いいえ</button><button type="button" class="primary" data-yes>はい、実行する</button></div>`;
+    let settled=false;
+    const finish=value=>{if(settled)return;settled=true;confirmation.close();confirmation.remove();if(previousFocus?.isConnected)previousFocus.focus();resolve(value);};
+    confirmation.querySelector('[data-no]').onclick=()=>finish(false);
+    confirmation.querySelector('[data-yes]').onclick=()=>finish(true);
+    confirmation.addEventListener('cancel',event=>{event.preventDefault();finish(false);});
+    confirmation.addEventListener('click',event=>{if(event.target===confirmation){const r=confirmation.getBoundingClientRect();if(event.clientX<r.left||event.clientX>r.right||event.clientY<r.top||event.clientY>r.bottom)finish(false);}});
+    document.body.append(confirmation);
+    confirmation.showModal();
+    confirmation.querySelector('[data-no]').focus();
+  });
+}
 async function api(path,options={}){
-  const descriptor=aiDescriptor(path,options),taskId=descriptor?aiActivity.start(descriptor):null;
+  const descriptor=aiDescriptor(path,options);
+  if(descriptor&&!await confirmAiExecution(descriptor))throw new Error('');
+  const taskId=descriptor?aiActivity.start(descriptor):null;
   const {aiActivity:activityOptions,...requestOptions}=options;
   try{
     const result=await deviceRequest(path,requestOptions);
