@@ -8,6 +8,7 @@ const suites = {
  ideas: 'ideas-smoke.mjs',
  themes: 'theme-browser-smoke.mjs',
  discovery: 'discovery-browser-smoke.mjs',
+ textDiscovery: 'text-discovery-browser-smoke.mjs',
  explicit: 'explicit-browser-smoke.mjs',
  drilldown: 'drilldown-browser-smoke.mjs',
  connections: 'connections-browser-smoke.mjs',
