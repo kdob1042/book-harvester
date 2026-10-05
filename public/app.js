@@ -13,6 +13,8 @@ let searchFilters={source:'',year:'',origin:''};
 const searchPath=()=>`/api/state?q=${encodeURIComponent(query)}&source=${encodeURIComponent(searchFilters.source)}&year=${encodeURIComponent(searchFilters.year)}&origin=${encodeURIComponent(searchFilters.origin)}`;
 let noticeTimer, searchTimer, pollBusy = false, authMethod = null, reauthenticating = false;
 const aiActivity = createAiActivity(), aiWatches = new Map();
+// A confirmation covers only the two steps of the explicitly chosen text action.
+const confirmedTextAction = Symbol('confirmedTextAction');
 let aiPollBusy = false;
 const errors = {
   subscription_reauth_required:'原資料は保存済みです。パソコンから ChatGPT に再接続してください。',
@@ -117,9 +119,10 @@ function confirmAiExecution(descriptor){
 }
 async function api(path,options={}){
   const descriptor=aiDescriptor(path,options);
-  if(descriptor&&!await confirmAiExecution(descriptor))throw new Error('');
+  const approved=options[confirmedTextAction]?.delete(path);
+  if(descriptor&&!approved&&!await confirmAiExecution(descriptor))throw new Error('');
   const taskId=descriptor?aiActivity.start(descriptor):null;
-  const {aiActivity:activityOptions,...requestOptions}=options;
+  const {aiActivity:activityOptions,[confirmedTextAction]:approval,...requestOptions}=options;
   try{
     const result=await deviceRequest(path,requestOptions);
     if(taskId){
@@ -280,7 +283,7 @@ function recordDialog(target = null) {
   modal(target ? 'この記録に補足する' : '引っかかりを残す', `<label><span>残し方</span><select id="capture-mode" class="capture-mode">
     <option value="image">写真</option><option value="audio">音声</option>${target ? '' : '<option value="url">公開URL</option><option value="text">文章</option><option value="file">PDF・EPUB・ハイライト</option>'}</select></label>
     <div id="capture-body" class="capture-body"></div><p id="capture-error" class="error" role="alert"></p>
-    <p class="subtle">${target ? 'いま開いている記録に追加します。' : '思いつきも、読書の一節も。整理は自動で続きます。'}</p>`);
+    <p class="subtle">${target ? 'いま開いている記録に追加します。' : '思いつきも、読書の一節も。AIは選んだ操作でだけ実行します。'}</p>`);
   $('#capture-mode').value = target && mode === 'text' ? 'image' : mode;
   const render = () => {
     stopRecorder(); setMode($('#capture-mode').value);
@@ -330,8 +333,15 @@ function recordDialog(target = null) {
       $('#capture-body').innerHTML='<input id="document-file" type="file" accept=".pdf,.epub,.json,.txt"><button id="pick-document" class="primary">ファイルを選ぶ</button><p>1ファイル10MBまで。PDF・EPUBは保存する範囲を選べます。AI抽出は各記録から明示的に実行します。対応ハイライトは自動で取り込みます。</p>';
       bind('#pick-document','click',()=>$('#document-file').click());bind('#document-file','change',event=>{if(event.target.files[0])saveImport([...event.target.files]);});
     } else {
-      $('#capture-body').innerHTML = `<form id="text-form"><label><span>残したい文章・一言</span><textarea id="capture-text" maxlength="20000" placeholder="思いついたことを、そのまま" required></textarea></label><label><span>出典（任意）</span><input id="capture-source" maxlength="2000" placeholder="空欄でも、本の名前やメディアのURLでも"></label><button class="primary" type="submit">残す</button></form>`;
-      bind('#text-form', 'submit', event => { event.preventDefault(); saveUpload(null, $('#capture-text').value, target); });
+      $('#capture-body').innerHTML = `<form id="text-form"><label><span>残したい文章・一言</span><textarea id="capture-text" maxlength="20000" placeholder="思いついたことを、そのまま" required></textarea></label><label><span>出典（任意）</span><input id="capture-source" maxlength="2000" placeholder="空欄でも、本の名前やメディアのURLでも"></label><button class="primary" type="submit">残す</button></form><button id="save-find-related" class="quiet" type="submit" form="text-form">残して関連を探す · AI</button><p class="subtle">関連を探す場合だけ文章を読み取り、既存の問い・記録から統合先と関連候補を探します。統合は候補を確認してから選べます。</p>`;
+      bind('#text-form', 'submit', async event => {
+        event.preventDefault();
+        const discover=event.submitter?.id==='save-find-related';
+        const text=$('#capture-text').value,source=$('#capture-source').value;
+        if(discover&&!await confirmAiExecution({label:'文章の読み取りと、統合先・関連候補の探索'}))return;
+        // Keep the confirmed bytes even while the confirmation dialog is open.
+        await saveUpload(null,text,target,discover?{file:null,text,target,source,key:crypto.randomUUID(),discover:true}:null);
+      });
     }
   };
   bind('#capture-mode', 'change', render); render();
@@ -351,8 +361,13 @@ async function saveUpload(file, text, target, reuse = null) {
     if (file) { payload = new FormData(); payload.set('file', file); }
     else { headers['Content-Type'] = 'application/json'; payload = JSON.stringify({ text, source:pending.source }); }
     if (target) headers['X-Capture-Version'] = String(target.version);
-    await api(target ? `/api/captures/${target.id}/assets` : '/api/captures', { method:'POST', headers, body:payload });
+    const saved=await api(target ? `/api/captures/${target.id}/assets` : '/api/captures', { method:'POST', headers, body:payload });
     uploading = false; uploadPending = null; dialog.close();
+    if(pending.discover){
+      if(saved.local){await home();showNotice('文章を端末に残しました。接続後に記録を開き、関連を探してください。');}
+      else await findSavedTextRelations(saved.id);
+      return;
+    }
     if (target) await openCapture(target.id); else await home();
     showNotice('残しました。AIはまだ実行していません。');
   } catch (error) {
@@ -367,6 +382,42 @@ async function saveUpload(file, text, target, reuse = null) {
     retry.addEventListener('click', () => saveUpload(pending.file, pending.text, pending.target, pending));
     $('#capture-body').append(retry);
   }
+}
+
+async function findSavedTextRelations(captureId){
+  try{
+    await openCapture(captureId);
+    const version=currentCapture.version;
+    const extractPath=`/api/captures/${captureId}/extract`;
+    const approval=new Set([extractPath,'/api/book/discover']);
+    if(!currentCapture.harvest){
+      await api(extractPath,{...json('POST',{version}),[confirmedTextAction]:approval});
+      showNotice('文章を残しました。読み取り後に関連候補を探します。');
+    }
+    for(let attempt=0;attempt<120;attempt++){
+      // Navigating away, changing the record or stopping extraction ends this plan.
+      // No search plan is persisted or resumed on reload or reconnection.
+      if(currentCapture?.id!==captureId||currentCapture.version!==version)return;
+      const c=await api(`/api/captures/${captureId}`);
+      if(currentCapture?.id!==captureId||c.version!==version)return;
+      if(c.harvest){
+        await openCapture(captureId);
+        const button=$('#find-related');if(button)button.disabled=true;
+        try{
+          const run=await api('/api/book/discover',{...json('POST',{id:captureId,version,search_mode:'ai_expanded',idempotency_key:crypto.randomUUID()}),[confirmedTextAction]:approval});
+          if(currentCapture?.id===captureId&&currentCapture.version===version)showRelated(run,c);
+        }finally{if(button?.isConnected)button.disabled=false;}
+        return;
+      }
+      if(!['pending','running'].includes(c.job?.state)){
+        await openCapture(captureId);
+        showNotice('文章は保存済みです。'+(errors[c.job?.error_code]||'読み取りを完了できませんでした。記録から再試行できます。'));
+        return;
+      }
+      await new Promise(resolve=>setTimeout(resolve,1500));
+    }
+    showNotice('文章は保存済みです。読み取りが終わったら「関連を探す」を押してください。');
+  }catch(error){showNotice('文章は保存済みです。'+(error.message||'関連探索は記録から実行できます。'));}
 }
 
 function graphMarkup(graph){
