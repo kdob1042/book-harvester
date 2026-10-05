@@ -206,7 +206,8 @@ function renderFeed() {
   const captures = state.captures;
   const deviceInfo=state.device&&(state.device.offline||state.device.pending||state.device.other_scope)?`<p class="subtle">${state.device.offline?'オフライン · 端末の読書キャッシュ':''} ${state.device.pending?`端末に保存・未送信 ${state.device.pending}件`:''} ${state.device.conflicts?`競合 ${state.device.conflicts}件`:''}${state.device.other_scope?' 別の保存先の未送信データは自動送信しません。':''} <button class="quiet" id="device-pending">保存状況を読む</button></p>`:'';
   const searchInfo=query?`<p class="subtle">${state.search_state==='semantic'?'言葉の一致と意味の近さから候補を探しています。意味の検索は索引のある最新1,000件が対象です。根拠は原資料で確認できます。':'言葉の一致から検索しています。意味の索引は設定・処理待ちです。'}</p>`:'';
-  $('#feed').innerHTML = `${deviceInfo}${searchInfo}${!query&&!state.filter_active?themeHome(state.theme_index):''}${(state.reflections||[]).map(r=>`<button class="capture-row" data-reflection="${r.id}"><span class="row-meta">${({session:'この区切りの持ち帰り · 記録から推定',day:'一日の振り返り',week:'一週間の振り返り'})[r.scope]}</span><h2>${esc(r.result.summary)}</h2></button>`).join('')}${(state.revisits||[]).map(r=>`<button class="capture-row" data-capture="${r.id}"><span class="row-meta">以前の問いとの再会</span><h2>${esc(r.question)}</h2><p class="subtle">${esc(r.reason)}</p></button>`).join('')}${(state.imports||[]).length&&!query?`<details class="fold"><summary>取り込み状況</summary>${state.imports.map(i=>`<button class="capture-row" data-import="${i.id}"><span class="row-meta">${esc(importState(i.state))}</span>${esc(i.name)}</button>`).join('')}</details>`:''}${(state.research||[]).length&&!query?`<details class="fold"><summary>調査の続きを見る</summary>${state.research.map(r=>`<button class="capture-row" data-research="${r.id}"><span class="row-meta">${esc(researchState(r.state))}</span>${esc(r.question)}</button>`).join('')}</details>`:''}${captures.length ? '<p class="section-label">記録からの知見</p>' : ''}${captures.map(c => {
+  const feed=$('#feed');
+  const markup = `${deviceInfo}${searchInfo}${!query&&!state.filter_active?themeHome(state.theme_index):''}${(state.reflections||[]).map(r=>`<button class="capture-row" data-reflection="${r.id}"><span class="row-meta">${({session:'この区切りの持ち帰り · 記録から推定',day:'一日の振り返り',week:'一週間の振り返り'})[r.scope]}</span><h2>${esc(r.result.summary)}</h2></button>`).join('')}${(state.revisits||[]).map(r=>`<button class="capture-row" data-capture="${r.id}"><span class="row-meta">以前の問いとの再会</span><h2>${esc(r.question)}</h2><p class="subtle">${esc(r.reason)}</p></button>`).join('')}${(state.imports||[]).length&&!query?`<details class="fold"><summary>取り込み状況</summary>${state.imports.map(i=>`<button class="capture-row" data-import="${i.id}"><span class="row-meta">${esc(importState(i.state))}</span>${esc(i.name)}</button>`).join('')}</details>`:''}${(state.research||[]).length&&!query?`<details class="fold"><summary>調査の続きを見る</summary>${state.research.map(r=>`<button class="capture-row" data-research="${r.id}"><span class="row-meta">${esc(researchState(r.state))}</span>${esc(r.question)}</button>`).join('')}</details>`:''}${captures.length ? '<p class="section-label">記録からの知見</p>' : ''}${captures.map(c => {
     const summary = c.harvest?.summary || c.original_preview || (c.kind === 'image' ? '残したページ' : '残した音声');
     const label = c.local_only?(c.local_conflict?'端末に保存・送信できませんでした':'端末に保存・接続後に自動送信'):statusLabel(c);
     const locator = c.page ? ` · ${c.locator_certainty === 'inferred' ? '推定 ' : ''}p.${esc(c.page)}` : '';
@@ -214,8 +215,20 @@ function renderFeed() {
       <h2>${esc(summary)}</h2>${label ? `<span class="status ${esc(c.state)}">${esc(label)}</span>` : `<p class="question-preview">${esc(c.harvest?.questions[0]?.text || '原資料と、考えの続きを読む。')}</p>`}</button>`;
   }).join('')}${!captures.length ? `<div class="empty"><img class="empty-symbol" src="/favicon.svg" alt=""><h2>${query ? 'その言葉は、まだ見つかりません。' : '最初の一枚から、育っていきます。'}</h2><p>${query ? '別の言葉で探してみてください。' : '書名も、ページ番号も、タグも不要です。<br>写真を残したら、本の続きへ。'}</p></div>` : ''}
     ${state.views.length && !query && !state.filter_active ? `<p class="section-label">自分の見方</p>${state.views.map(v => `<button class="view-row" data-view="${v.id}"><span class="row-meta">自分の見方 · 第${v.version}版</span><h2>${esc(v.body)}</h2></button>`).join('')}` : ''}`;
+  // Keep unchanged DOM, and retain proposal controls even when other feed
+  // rows change. Recreating this empty panel every poll caused it to collapse
+  // and re-expand after the asynchronous read, moving the entire page.
+  if(feed.renderedMarkup===markup)return;
+  const oldProposals=feed.querySelector('#integration-proposals');
+  const oldFind=feed.querySelector('#find-integration-proposals');
+  const template=document.createElement('template');template.innerHTML=markup;
+  if(oldProposals&&template.content.querySelector('#integration-proposals')){
+    template.content.querySelector('#integration-proposals').replaceWith(oldProposals);
+    template.content.querySelector('#find-integration-proposals').replaceWith(oldFind);
+  }
+  feed.replaceChildren(template.content);feed.renderedMarkup=markup;
   wireThemeLinks();
-  wireIntegrationProposals();
+  if(!oldProposals||!oldProposals.isConnected)wireIntegrationProposals();
   bind('#device-pending','click',devicePendingDialog);
   document.querySelectorAll('[data-capture]').forEach(el => el.addEventListener('click', () => openCapture(el.dataset.capture).catch(e => showNotice(e.message))));
   document.querySelectorAll('[data-import]').forEach(el=>el.addEventListener('click',()=>openImport(el.dataset.import).catch(e=>showNotice(e.message))));
@@ -538,7 +551,14 @@ setInterval(async () => {
       }
     } else if(currentView?.theme&&['pending','running','blocked'].includes(currentView.job_state)&&!app.querySelector('details[open]')){const fresh=await api(`/api/themes/${encodeURIComponent(currentView.id)}`);if(fresh.revision!==currentView.revision||fresh.job?.state!==currentView.job_state)await openTheme(currentView.id);
     } else if (!currentCapture && !currentView) {
-      state = await api(searchPath()); renderFeed();
+      const feed=$('#feed'),path=searchPath();
+      const fresh=await api(path);
+      if(!currentCapture&&!currentView&&$('#feed')===feed&&searchPath()===path){
+        // Leave expanded material and the control being used in place.
+        state=fresh;
+        if(!feed.querySelector('details[open]')&&!feed.contains(document.activeElement))renderFeed();
+        refreshIntegrationProposals();
+      }
     }
   } catch (e) { if (e.status !== 401) { /* Preserve the last readable page during a temporary outage. */ } }
   finally { pollBusy = false; }
@@ -697,13 +717,21 @@ function showRelated(run,c){
  bind('#integrate-related','click',async event=>{event.target.disabled=true;const selectedIds=ids();const mode=$('#integration-mode')?.value==='auto'?undefined:$('#integration-mode')?.value;const actionKey=`integration:${run.id}:${mode||''}:${selectedIds.slice().sort().join(',')}`;let key=sessionStorage.getItem(actionKey);if(!key){key=crypto.randomUUID();sessionStorage.setItem(actionKey,key);}try{const r=await api('/api/book/integrate',json('POST',{discovery_id:run.id,selected_ids:selectedIds,...mode?{mode}:{},idempotency_key:key}));if(r.state==='completed')await openTheme(r.theme_id);else showNotice('処理中、または中断しています。');}catch(e){showNotice(e.message);}finally{event.target.disabled=false;}});
 }
 
-let proposalGenerationKey=null;
+let proposalGenerationKey=null,proposalBusy=false,proposalReadVersion=0;
+async function refreshIntegrationProposals(){
+ const target=$('#integration-proposals');if(!target||proposalBusy)return;
+ const version=++proposalReadVersion;
+ try{const run=await api('/api/book/integration-proposals');
+  if(run&&!proposalBusy&&version===proposalReadVersion&&target===$('#integration-proposals'))showIntegrationProposals(run);
+ }catch{/* Keep the last readable proposals during a temporary outage. */}
+}
 function wireIntegrationProposals(){
- bind('#find-integration-proposals','click',async event=>{event.target.disabled=true;proposalGenerationKey ||= crypto.randomUUID();try{const run=await api('/api/book/integration-proposals',json('POST',{idempotency_key:proposalGenerationKey}));if(run.state!=='running')proposalGenerationKey=null;showIntegrationProposals(run);}catch(e){proposalGenerationKey=null;showNotice(e.message);}finally{event.target.disabled=false;}});
- api('/api/book/integration-proposals').then(run=>{if($('#integration-proposals')&&run)showIntegrationProposals(run);}).catch(()=>{});
+ bind('#find-integration-proposals','click',async event=>{event.target.disabled=true;proposalBusy=true;++proposalReadVersion;proposalGenerationKey ||= crypto.randomUUID();try{const run=await api('/api/book/integration-proposals',json('POST',{idempotency_key:proposalGenerationKey}));if(run.state!=='running')proposalGenerationKey=null;showIntegrationProposals(run);}catch(e){proposalGenerationKey=null;showNotice(e.message);}finally{proposalBusy=false;event.target.disabled=false;}});
+ refreshIntegrationProposals();
 }
 function showIntegrationProposals(run){
  const target=$('#integration-proposals');if(!target)return;
+ const signature=JSON.stringify(run);if(target.proposalSignature===signature)return;target.proposalSignature=signature;
  if(run.state!=='completed'){target.textContent=run.state==='running'?'統合案を探しています…':(run.error||'統合案を取得できませんでした。');return;}
  const storageKey=`proposal-selection:${run.id}`;let selected;try{selected=JSON.parse(sessionStorage.getItem(storageKey));}catch{};
  const conflict=(a,b)=>Boolean(a.destination_id&&(a.destination_id===b.destination_id||b.materials.some(m=>m.id===a.destination_id))||b.destination_id&&a.materials.some(m=>m.id===b.destination_id));
@@ -712,5 +740,5 @@ function showIntegrationProposals(run){
  wireThemeLinks();const boxes=()=>[...target.querySelectorAll('[data-proposal-select]')];const ids=()=>boxes().filter(x=>x.checked&&!x.disabled).map(x=>x.dataset.proposalSelect);
  const update=()=>{const chosen=run.proposals.filter(p=>ids().includes(p.id));for(const box of boxes()){const p=run.proposals.find(p=>p.id===box.dataset.proposalSelect);if(!['completed','running'].includes(p.state))box.disabled=!box.checked&&chosen.some(x=>conflict(x,p));}sessionStorage.setItem(storageKey,JSON.stringify(ids()));const b=$('#execute-proposals');if(b){b.textContent=`選んだ${ids().length}案を統合`;b.disabled=!ids().length;}};
  boxes().forEach(x=>x.onchange=update);update();
- bind('#execute-proposals','click',async event=>{event.target.disabled=true;boxes().forEach(x=>x.disabled=true);try{const saved=await api('/api/book/integration-proposals/execute',json('POST',{run_id:run.id,selected_ids:selected=run.proposals.filter(p=>target.querySelector(`[data-proposal-select="${p.id}"]`)?.checked&&!['completed','running'].includes(p.state)).map(p=>p.id),retry:true}));showIntegrationProposals(saved);}catch(e){showNotice(e.message);boxes().forEach(x=>{const p=run.proposals.find(p=>p.id===x.dataset.proposalSelect);x.disabled=['completed','running'].includes(p.state);});update();}});
+ bind('#execute-proposals','click',async event=>{event.target.disabled=true;proposalBusy=true;++proposalReadVersion;boxes().forEach(x=>x.disabled=true);try{const saved=await api('/api/book/integration-proposals/execute',json('POST',{run_id:run.id,selected_ids:selected=run.proposals.filter(p=>target.querySelector(`[data-proposal-select="${p.id}"]`)?.checked&&!['completed','running'].includes(p.state)).map(p=>p.id),retry:true}));showIntegrationProposals(saved);}catch(e){showNotice(e.message);boxes().forEach(x=>{const p=run.proposals.find(p=>p.id===x.dataset.proposalSelect);x.disabled=['completed','running'].includes(p.state);});update();}finally{proposalBusy=false;}});
 }
