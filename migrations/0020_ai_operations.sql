@@ -205,19 +205,25 @@ CREATE TRIGGER ai_operation_own_book_receipt AFTER INSERT ON book_operation_rece
  SELECT 'receipt',NEW.operation_key,operation_id FROM ai_operation_write_owners; END;
 
 -- Current-generation state for atomic queued completion and snapshot checks.
+-- workerd permits at most five terms in a compound SELECT. Resolve each owned
+-- job through its indexed table instead of an eight-term UNION ALL.
 CREATE VIEW ai_operation_job_states AS
-SELECT l.operation_id,'capture' AS kind,j.id AS job_id,CAST(j.version AS TEXT) AS generation,j.state,'extract' AS action_kind,j.capture_id AS target_id FROM jobs j JOIN ai_operation_jobs l ON l.kind='capture' AND l.job_id=j.id AND l.generation=CAST(j.version AS TEXT)
-UNION ALL
-SELECT l.operation_id,'graph' AS kind,j.id AS job_id,CAST(j.version AS TEXT) AS generation,j.state,'graph' AS action_kind,j.capture_id AS target_id FROM graph_jobs j JOIN ai_operation_jobs l ON l.kind='graph' AND l.job_id=j.id AND l.generation=CAST(j.version AS TEXT)
-UNION ALL
-SELECT l.operation_id,'theme' AS kind,j.id AS job_id,CAST(j.version AS TEXT) AS generation,j.state,j.kind AS action_kind,j.target_id AS target_id FROM theme_jobs j JOIN ai_operation_jobs l ON l.kind='theme' AND l.job_id=j.id AND l.generation=CAST(j.version AS TEXT)
-UNION ALL
-SELECT l.operation_id,'research' AS kind,j.id AS job_id,CAST(j.created_at AS TEXT) AS generation,j.state,NULL AS action_kind,NULL AS target_id FROM research_runs j JOIN ai_operation_jobs l ON l.kind='research' AND l.job_id=j.id AND l.generation=CAST(j.created_at AS TEXT)
-UNION ALL
-SELECT l.operation_id,'import' AS kind,j.id AS job_id,CAST(j.created_at AS TEXT) AS generation,j.state,'extract_import' AS action_kind,j.id AS target_id FROM import_jobs j JOIN ai_operation_jobs l ON l.kind='import' AND l.job_id=j.id AND l.generation=CAST(j.created_at AS TEXT)
-UNION ALL
-SELECT l.operation_id,'embedding' AS kind,j.capture_id AS job_id,CAST(j.version AS TEXT) AS generation,j.state,NULL AS action_kind,j.capture_id AS target_id FROM embedding_jobs j JOIN ai_operation_jobs l ON l.kind='embedding' AND l.job_id=j.capture_id AND l.generation=CAST(j.version AS TEXT)
-UNION ALL
-SELECT l.operation_id,'bibliography' AS kind,j.capture_id AS job_id,CAST(j.version AS TEXT) AS generation,j.state,NULL AS action_kind,j.capture_id AS target_id FROM bibliography_jobs j JOIN ai_operation_jobs l ON l.kind='bibliography' AND l.job_id=j.capture_id AND l.generation=CAST(j.version AS TEXT)
-UNION ALL
-SELECT l.operation_id,'reflection' AS kind,j.id AS job_id,CAST(j.signature AS TEXT) AS generation,j.state,NULL AS action_kind,NULL AS target_id FROM reflection_jobs j JOIN ai_operation_jobs l ON l.kind='reflection' AND l.job_id=j.id AND l.generation=CAST(j.signature AS TEXT);
+SELECT l.operation_id,l.kind,l.job_id,l.generation,
+ CASE l.kind WHEN 'capture' THEN c.state WHEN 'graph' THEN g.state
+  WHEN 'theme' THEN t.state WHEN 'research' THEN r.state WHEN 'import' THEN i.state
+  WHEN 'embedding' THEN e.state WHEN 'bibliography' THEN b.state WHEN 'reflection' THEN f.state END AS state,
+ CASE l.kind WHEN 'capture' THEN 'extract' WHEN 'graph' THEN 'graph'
+  WHEN 'theme' THEN t.kind WHEN 'import' THEN 'extract_import' END AS action_kind,
+ CASE l.kind WHEN 'capture' THEN c.capture_id WHEN 'graph' THEN g.capture_id
+  WHEN 'theme' THEN t.target_id WHEN 'import' THEN i.id
+  WHEN 'embedding' THEN e.capture_id WHEN 'bibliography' THEN b.capture_id END AS target_id
+FROM ai_operation_jobs l
+LEFT JOIN jobs c ON l.kind='capture' AND l.job_id=c.id AND l.generation=CAST(c.version AS TEXT)
+LEFT JOIN graph_jobs g ON l.kind='graph' AND l.job_id=g.id AND l.generation=CAST(g.version AS TEXT)
+LEFT JOIN theme_jobs t ON l.kind='theme' AND l.job_id=t.id AND l.generation=CAST(t.version AS TEXT)
+LEFT JOIN research_runs r ON l.kind='research' AND l.job_id=r.id AND l.generation=CAST(r.created_at AS TEXT)
+LEFT JOIN import_jobs i ON l.kind='import' AND l.job_id=i.id AND l.generation=CAST(i.created_at AS TEXT)
+LEFT JOIN embedding_jobs e ON l.kind='embedding' AND l.job_id=e.capture_id AND l.generation=CAST(e.version AS TEXT)
+LEFT JOIN bibliography_jobs b ON l.kind='bibliography' AND l.job_id=b.capture_id AND l.generation=CAST(b.version AS TEXT)
+LEFT JOIN reflection_jobs f ON l.kind='reflection' AND l.job_id=f.id AND l.generation=CAST(f.signature AS TEXT)
+WHERE coalesce(c.id,g.id,t.id,r.id,i.id,e.capture_id,b.capture_id,f.id) IS NOT NULL;

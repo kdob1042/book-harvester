@@ -29,7 +29,11 @@ try{
  await page.goto(f.env.APP_ORIGIN);await expect(page.locator('#record')).toBeVisible();
  await page.evaluate(async()=>{const {deviceDb}=await import('/offline.js');const db=await deviceDb();const original=await new Promise(r=>{const q=db.transaction('outbox').objectStore('outbox').get('retained');q.onsuccess=()=>r(q.result);});if(await original.body.text()!=='original')throw Error('Original lost');});
  for(const status of [401,403]){
-  failure=status;await page.goto(f.env.APP_ORIGIN);await expect(page).toHaveURL(/\/cdn-cgi\/access\/logout$/);await expect(page.locator('#password')).toHaveCount(0);
+  // The app intentionally navigates away as soon as the expired session is
+  // detected. Waiting for the original page's load races that replacement.
+  failure=status;
+  try{await page.goto(f.env.APP_ORIGIN,{waitUntil:'commit'});}catch(error){if(!error.message.includes('net::ERR_ABORTED'))throw error;}
+  await expect(page).toHaveURL(/\/cdn-cgi\/access\/logout$/);await expect(page.getByText('Access reauthentication',{exact:true})).toBeVisible();await expect(page.locator('#password')).toHaveCount(0);
   failure=null;await page.goto(f.env.APP_ORIGIN);await expect(page.locator('#record')).toBeVisible();
  }
  await page.evaluate(()=>window.dispatchEvent(new Event('device-auth-expired')));await expect(page).toHaveURL(/\/cdn-cgi\/access\/logout$/);

@@ -62,7 +62,7 @@ regression-tested.
 ## Passed checks
 
 - `npm run check`: passed (TypeScript)
-- `npm test`: 229 passed, 0 failed, 0 skipped
+- `npm test`: 230 passed, 0 failed, 0 skipped
 - `npm run build`: passed, Cloudflare dry run only
 - JavaScript syntax checks for changed browser files and the new browser smoke script
 - `git diff --check`: passed
@@ -81,28 +81,44 @@ ownership, unrelated legacy repairs, and retry-registration polling gaps. Tests 
 synthetic data and provider doubles. The test helper
 rejects unexpected external network requests.
 
-## Unverified checks and limits
+## Mac runtime and browser verification (2026-10-06)
 
-- `npm run test:browser` stops at browser launch because the bundled Playwright
-  Chromium executable is absent. The installed `/usr/bin/chromium` was tried with
-  the existing smoke script; it fails with `process_singleton_posix.cc:297 socket()
-  Operation not permitted`, including one approved escalated retry. No browser
-  rendering or mobile screenshot result is claimed. The new
-  `scripts/ai-cancellation-browser-smoke.mjs` is included in the aggregate suite.
-- `npm run migrate` uses `wrangler d1 migrations apply DB --local`; output reached
-  the local disposable DB. Completion could not be verified after the runner
-  rejected further observation due to possible remote schema-change risk. The
-  permitted retry returned `Unknown process id`. No remote migration was run.
+- Node 24 and a separate headless Playwright Chromium were used. No existing
+  browser, profile, foreground window, or paid AI provider was used.
+- The aggregate browser suite covers auth, cancellation, activity, capture,
+  expansion, ideas, themes, discovery, text discovery, explicit execution,
+  drilldown, connections, and integration proposals.
+- Actual workerd rejected the original eight-term job-state UNION because its
+  compound SELECT limit is five. Migration 0020 now resolves each owned job with
+  indexed joins, retaining current-generation and superseded-job behavior.
+  All 22 migrations applied successfully to disposable local D1.
+- The local Worker/D1/R2/Queue check passed with synthetic PDF parsing, login,
+  sync, and cleanup. A separate explicit-policy runtime check passed cancellation
+  tombstones, extraction status, durable stop, original retention, retry ownership,
+  and isolation from an older stop. AI keys were empty.
+- Browser verification exposed a retained Blob-only outbox entry without a path;
+  the action descriptor now safely ignores incomplete entries. The browser
+  fixtures retain the existing two-to-three-candidate deep-dive contract and wait
+  for delayed route handlers to finish before removing them. Auth checks verify
+  the intended Access reauthentication page even when it replaces navigation.
+- Transient operation/replay metadata is excluded from the integration proposal
+  display signature. Status polling retains expanded evidence, selections, DOM
+  identity, and scroll position when the saved proposal content is unchanged.
+
+## Limits
+
 - Stopping prevents further application saves/stages and requests provider abort.
   It cannot guarantee refund or reversal of computation already performed by an
   external provider. Cancellation polling can take about one second plus DB latency.
 - Cancellation is forward-looking: committed prior results and original records
-  are intentionally preserved. Provider quality, paid calls, production D1/Queues,
-  live Cloudflare execution, and physical devices were not tested.
+  are intentionally preserved. Provider quality, paid calls, and physical devices
+  are outside these synthetic/local checks. Publication evidence is recorded
+  separately in PR #63 and the release report.
 
-## Suggested publication step
+## Publication requirements
 
-Review this diff and run the aggregate browser suite in a browser-capable approved
-runner. Then, with separate authorization, publish a draft PR from current main.
-Migration 0020 must be applied before the new Worker is deployed. No push, PR,
-merge, remote migration, or deployment was performed as part of this work.
+The final PR head must pass the full browser suite, type checks, tests, build, and
+GitHub CI. Migration 0020 must be applied before the new Worker and matching static
+assets are deployed. Existing production bindings, secrets, AI settings, and the
+explicit execution policy must be retained. User authorization to merge and
+publish PR #63 was received before the Mac verification phase.

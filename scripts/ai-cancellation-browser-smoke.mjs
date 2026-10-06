@@ -48,13 +48,16 @@ try{
  await page.unroute('**/api/ai-operations/*/cancel');
  // Completion wins while the cancel POST is delayed: report completion, not stop.
  await page.reload();await expect(page.locator('#record')).toBeVisible();releaseAI=null;
+ let finishCancel;
+ const cancelHandled=new Promise(resolve=>{finishCancel=resolve;});
  await page.route('**/api/ai-operations/*/cancel',async route=>{
-  releaseAI();await expect.poll(()=>f.db.prepare('SELECT count(*) n FROM drilldown_runs').get().n).toBe(1);await route.continue();
+  releaseAI();await expect.poll(()=>f.db.prepare('SELECT count(*) n FROM drilldown_runs').get().n).toBe(1);await route.continue();finishCancel();
  });
  await start();await page.getByRole('button',{name:'停止',exact:true}).click();
  await expect(page.locator('.ai-dock-panel')).toContainText('深掘り完了');
  await expect(page.locator('.ai-dock-panel')).not.toContainText('停止済み');
  await expect(page.locator('[data-drilldown-question]')).toHaveCount(2);
+ await cancelHandled;
  await page.unroute('**/api/ai-operations/*/cancel');
  // Reload reads existing operations only, never starts a new AI request.
  const beforeReload=calls;await page.reload();await expect(page.locator('#record')).toBeVisible();
@@ -83,6 +86,8 @@ try{
  await page.getByRole('button',{name:'停止',exact:true}).click();
  await expect(page.locator('#import-extract')).toHaveText('抽出を再試行 · AI');
  await expect(page.locator('article .status')).toHaveText('停止済み');
+ // On the narrow viewport the expanded dock covers the lower detail actions.
+ await page.locator('[data-ai-focus="collapse"]').click();
  const originalAttemptCount=f.db.prepare('SELECT count(*) n FROM ai_operations WHERE path=?').get(`/api/imports/${imported.id}/extract`).n;
  await page.locator('#import-extract').click();
  await expect(page.getByRole('heading',{name:'AIを実行しますか？',exact:true})).toBeVisible();

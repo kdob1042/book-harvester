@@ -749,7 +749,10 @@ function wireIntegrationProposals(){
 }
 function showIntegrationProposals(run){
  const target=$('#integration-proposals');if(!target)return;
- const signature=JSON.stringify(run);if(target.proposalSignature===signature)return;target.proposalSignature=signature;
+ // Operation/replay metadata differs between POST and the saved-data GET.
+ // It must not replace unchanged proposal controls during status refreshes.
+ const {ai_operation,duplicate,...proposalContent}=run;
+ const signature=JSON.stringify(proposalContent);if(target.proposalSignature===signature)return;target.proposalSignature=signature;
  if(run.state!=='completed'){target.textContent=run.state==='running'?'統合案を探しています…':(run.error||'統合案を取得できませんでした。');return;}
  const storageKey=`proposal-selection:${run.id}`;let selected;try{selected=JSON.parse(sessionStorage.getItem(storageKey));}catch{};
  const conflict=(a,b)=>Boolean(a.destination_id&&(a.destination_id===b.destination_id||b.materials.some(m=>m.id===a.destination_id))||b.destination_id&&a.materials.some(m=>m.id===b.destination_id));
