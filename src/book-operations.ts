@@ -1,3 +1,4 @@
+import {cancellationCleanup} from './ai-cancellation.ts';
 import {startImportExtraction} from './imports.ts';
 import {dispatch} from './queue.ts';
 import {startExtraction} from './extraction.ts';
@@ -81,5 +82,5 @@ export async function callBook(env:Env,ctx:ExecutionContext,name:string,a:Record
  const key=String(a.idempotency_key||'');if(!/^[a-zA-Z0-9_-]{16,100}$/.test(key))fail(400,'invalid_idempotency_key');const operation=`${name}:${key}`,hash=await digest(JSON.stringify({...a,...a.file?{file:{...(a.file as Record<string,unknown>),download_url:undefined}}:{}}));
  const claim=await stmt(env,'INSERT OR IGNORE INTO book_operation_receipts(operation_key,request_hash,created_at) VALUES(?,?,?)',operation,hash,Date.now()).run();
  if(!claim.meta.changes){const old=await stmt(env,'SELECT * FROM book_operation_receipts WHERE operation_key=?',operation).first<{request_hash:string;state:string;result_json:string}>();if(old!.request_hash!==hash)fail(409,'idempotency_conflict');if(old!.state!=='completed')fail(409,'operation_in_progress_or_interrupted');return JSON.parse(old!.result_json);}
- try{const result=await executeBook(env,ctx,name,a);await stmt(env,"UPDATE book_operation_receipts SET state='completed',result_json=? WHERE operation_key=?",JSON.stringify(result),operation).run();return result;}catch(e){await stmt(env,"UPDATE book_operation_receipts SET state='interrupted' WHERE operation_key=? AND state='running'",operation).run();throw e;}
+ try{const result=await executeBook(env,ctx,name,a);await stmt(cancellationCleanup(env),"UPDATE book_operation_receipts SET state='completed',result_json=? WHERE operation_key=? AND state='running'",JSON.stringify(result),operation).run();return result;}catch(e){await stmt(cancellationCleanup(env),"UPDATE book_operation_receipts SET state='interrupted' WHERE operation_key=? AND state='running'",operation).run();throw e;}
 }

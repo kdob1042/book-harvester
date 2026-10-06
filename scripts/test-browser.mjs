@@ -2,6 +2,7 @@ import {execFileSync, spawnSync} from 'node:child_process';
 
 const suites = {
  auth: 'auth-browser-smoke.mjs',
+ cancellation: 'ai-cancellation-browser-smoke.mjs',
  activity: 'ai-activity-browser-smoke.mjs',
  capture: 'browser-smoke.mjs',
  expansion: 'expansion-smoke.mjs',
@@ -15,6 +16,9 @@ const suites = {
  proposals: 'integration-proposals-browser-smoke.mjs'
 };
 const featureSuites = {
+ 'public/ai-retry.js': ['cancellation','activity','textDiscovery'],
+ 'public/ai-operations.js': ['cancellation','activity','textDiscovery'],
+ 'public/ai-action-contract.js': ['cancellation','activity','textDiscovery'],
  'public/drilldown-panel.js': ['drilldown','activity'],
  'public/ai-activity.js': ['activity'],
  'public/ai-activity.css': ['activity'],

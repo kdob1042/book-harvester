@@ -1,3 +1,4 @@
+import {commitAIResult} from './ai-cancellation.ts';
 import {stmt,rows,id,now,fail,text} from './core.ts';
 import {call,AiError} from './ai.ts';
 const str={type:'string'};
@@ -19,7 +20,7 @@ export async function suggestRelations(env:Env,anchorId:string,input:Record<stri
  const payload=JSON.stringify({anchor,pool,existing});if(payload.length>150000)fail(413,'問いが多すぎます。探索範囲を減らしてください。');
  const response=await call(env,null,'responses',env.OPENAI_MODEL,{model:env.OPENAI_MODEL,store:false,instructions:relationInstructions,input:payload,max_output_tokens:Number(env.AI_MAX_OUTPUT_TOKENS),text:{format:{type:'json_schema',name:'question_relations_v1',strict:true,schema:relationSchema}}},fetcher);
  if(response.status==='incomplete')throw new AiError('incomplete_output');let candidates;try{candidates=validateRelations(JSON.parse((response.output||[]).flatMap(o=>o.content||[]).filter(b=>b.type==='output_text').map(b=>b.text).join('')),anchorId,pool);}catch(e){if(e instanceof AiError)throw e;throw new AiError('invalid_output');}
- const runId=id(),saved=await stmt(env,`INSERT INTO question_relation_runs SELECT ?,id,version,?,? FROM themes WHERE id=? AND version=? AND state='active' AND merged_into IS NULL`,runId,JSON.stringify(candidates),now(),anchorId,anchor.version).run();if(!saved.meta.changes)fail(409,'問いが更新されています。');return {id:runId,candidates};
+ const runId=id(),[saved]=await commitAIResult(env,[stmt(env,`INSERT INTO question_relation_runs SELECT ?,id,version,?,? FROM themes WHERE id=? AND version=? AND state='active' AND merged_into IS NULL`,runId,JSON.stringify(candidates),now(),anchorId,anchor.version)]);if(!saved.meta.changes)fail(409,'問いが更新されています。');return {id:runId,candidates};
 }
 export async function saveRelation(env:Env,anchorId:string,input:Record<string,unknown>){
  const run=await stmt(env,'SELECT * FROM question_relation_runs WHERE id=? AND anchor_id=?',text(input.run_id,100),anchorId).first<any>();if(!run)fail(404,'候補が見つかりません。');const index=Number(input.candidate_index),c=JSON.parse(run.result_json)[index];if(!Number.isInteger(index)||index<0||!c)fail(400,'候補を選んでください。');

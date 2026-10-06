@@ -1,3 +1,4 @@
+import {commitAIResult} from './ai-cancellation.ts';
 import {oppositionLinks} from './question-relations.ts';
 import {stmt,rows,id,now,fail,text} from './core.ts';
 import {call,AiError,responseJson} from './ai.ts';
@@ -26,7 +27,7 @@ export async function drilldown(env:Env,parentId:string,input:Record<string,unkn
  const candidates=validateDrilldown(responseJson(response));
  for(const c of candidates)if(c.target!=='selected'&&!oppositions.some(o=>o.theme.id===c.opposite_id))throw new AiError('invalid_output');
  const snapshot=oppositions.map(o=>({id:o.theme.id,version:o.theme.version,question:o.theme.question}));
- const runId=id();const saved=await stmt(env,`INSERT INTO drilldown_runs(id,parent_id,parent_version,result_json,created_at,oppositions_json) SELECT ?,id,version,?,?,? FROM themes WHERE id=? AND version=? AND state='active' AND merged_into IS NULL`,runId,JSON.stringify(candidates),now(),JSON.stringify(snapshot),parentId,context.theme.version).run();if(!saved.meta.changes)fail(409,'問いが更新されています。');return {id:runId,candidates,oppositions:snapshot};
+ const runId=id();const [saved]=await commitAIResult(env,[stmt(env,`INSERT INTO drilldown_runs(id,parent_id,parent_version,result_json,created_at,oppositions_json) SELECT ?,id,version,?,?,? FROM themes WHERE id=? AND version=? AND state='active' AND merged_into IS NULL`,runId,JSON.stringify(candidates),now(),JSON.stringify(snapshot),parentId,context.theme.version)]);if(!saved.meta.changes)fail(409,'問いが更新されています。');return {id:runId,candidates,oppositions:snapshot};
 }
 export async function addDrilldownCandidate(env:Env,parentId:string,input:Record<string,unknown>){
  const run=await stmt(env,'SELECT * FROM drilldown_runs WHERE id=? AND parent_id=?',String(input.run_id||''),parentId).first<any>();if(!run)fail(404,'候補が見つかりません。');

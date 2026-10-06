@@ -1,6 +1,9 @@
 import {questionTree} from './question-tree.js';
 import {setDeviceAuthMethod,deviceRequest,initDevice,cacheRecent,pendingOperations,discardOperation,clearReadingCache,exportDevice,discardAllOutbox,resolveConflict,resume,lockDevice,deviceSettings,setDeviceSettings} from './offline.js';
 import {createAiActivity} from './ai-activity.js';
+import {describeAIAction} from './ai-action-contract.js';
+import {createAiOperations} from './ai-operations.js';
+import {createIntegrationAttempt,integrationActionKey,importExtractionLabel} from './ai-retry.js';
 import {mountDrilldown,clearDrilldowns} from './drilldown-panel.js';
 const app = document.querySelector('#app');
 const dialog = document.querySelector('#dialog');
@@ -12,7 +15,9 @@ let state, currentCapture = null, currentView = null, query = '', recorder = nul
 let searchFilters={source:'',year:'',origin:''};
 const searchPath=()=>`/api/state?q=${encodeURIComponent(query)}&source=${encodeURIComponent(searchFilters.source)}&year=${encodeURIComponent(searchFilters.year)}&origin=${encodeURIComponent(searchFilters.origin)}`;
 let noticeTimer, searchTimer, pollBusy = false, authMethod = null, reauthenticating = false;
-const aiActivity = createAiActivity(), aiWatches = new Map();
+const aiActivity = createAiActivity();
+const aiOperations = createAiOperations({activity:aiActivity,request:deviceRequest});
+const aiOperationContext = Symbol('aiOperationContext');
 // A confirmation covers only the two steps of the explicitly chosen text action.
 const confirmedTextAction = Symbol('confirmedTextAction');
 let aiPollBusy = false;
@@ -36,67 +41,40 @@ function showNotice(text) {
   noticeTimer = setTimeout(() => { notice.textContent = ''; }, 4500);
 }
 function aiDescriptor(path, options) {
-  if((options.method||'GET').toUpperCase()!=='POST')return null;
+  const spec=describeAIAction(path,options.method||'GET');
+  if(!spec||spec.mode==='ingestion'&&!state?.automatic_ingestion_ai)return null;
   let data={};try{if(typeof options.body==='string')data=JSON.parse(options.body);}catch{}
   const theme=/^\/api\/themes\/([^/]+)\/(drilldown|relationships|rebuild)$/.exec(path);
-  const capture=/^\/api\/captures\/([^/]+)\/(ask|retry|extract)$/.exec(path);
-  const imported=/^\/api\/imports\/([^/]+)\/extract$/.exec(path);
+  const capture=/^\/api\/captures\/([^/]+)\/(ask|retry|extract|assets)$/.exec(path);
+  const imported=/^\/api\/imports\/([^/]+)\/(extract|select|retry)$/.exec(path);
   const research=/^\/api\/research\/([^/]+)\/retry$/.exec(path);
-  let label, open, watch, cancel;
-  if(theme){
-    const id=decodeURIComponent(theme[1]);label={drilldown:'深掘り',relationships:'関係探索',rebuild:'理解更新'}[theme[2]];open=()=>openTheme(id);
-    if(theme[2]==='rebuild')watch=()=>deviceRequest(`/api/themes/${encodeURIComponent(id)}`).then(r=>r.job);
-  }else if(capture){
-    const id=capture[1];label=capture[2]==='ask'?'回答生成':'知見抽出';open=()=>openCapture(id);
-    if(capture[2]!=='ask'){
-      watch=()=>deviceRequest(`/api/captures/${id}`).then(r=>r.job);
-      cancel=()=>deviceRequest(`/api/captures/${id}/cancel-extraction`,json('POST',{version:data.version}));
-    }
-  }else if(imported){
-    const id=imported[1];label='知見抽出';open=()=>openImport(id);
-    watch=async()=>{
-      const job=await deviceRequest(`/api/imports/${id}`);
-      if(['pending','running','failed','canceled'].includes(job.state))return job;
-      const captureIds=job.items.filter(i=>i.capture_id).map(i=>i.capture_id);
-      if(!captureIds.length)return {state:job.state==='partial'?'failed':'waiting',error:job.state==='partial'?'一部の抽出に失敗しました。':'対象の範囲を選んでください。'};
-      const jobs=await Promise.all(captureIds.map(id=>deviceRequest(`/api/captures/${id}`).then(r=>r.job)));
-      return jobs.find(j=>['running','pending'].includes(j?.state))||jobs.find(j=>['failed','blocked'].includes(j?.state))||{state:'completed'};
-    };
-  }else if(path==='/api/research'||research){
-    label='調査';const id=research?.[1];
-    watch=result=>deviceRequest(`/api/research/${id||result.id}`);
-    open=result=>(id||result?.id)?openResearch(id||result.id):Promise.resolve();
-  }else if(path==='/api/graph/rebuild'){
-    label='関係整理';const id=data.capture_ids?.[0];open=()=>openCapture(id);
-    watch=()=>deviceRequest(`/api/captures/${id}`).then(r=>r.graph?.job);
-  }else if(path==='/api/book/discover'){
-    label='統合探索';const isTheme=currentView?.theme;open=async result=>{await (isTheme?openTheme(data.id):openCapture(data.id));if(result)showRelated(result,{id:data.id,kind:isTheme?'theme':'capture'});};
-  }else if(path==='/api/book/integrate'){
-    label='統合';open=result=>result?.theme_id?openTheme(result.theme_id):Promise.resolve();
-  }else if(path==='/api/book/integration-proposals'||path==='/api/book/integration-proposals/execute'){
-    label=path.endsWith('/execute')?'統合':'統合探索';open=()=>home();
-  }else if(path==='/api/theme-changes'||path==='/api/concept-edits'){
-    label='整理案作成';open=result=>path==='/api/concept-edits'&&result?showConceptEdit(result):home();
-  }else return null;
-  const descriptor={label,detail:data.question||$('#app h1')?.textContent||label,open,watch,cancel,...options.aiActivity};
+  let label=spec.label,open;
+  if(theme){const id=decodeURIComponent(theme[1]);label={drilldown:'深掘り',relationships:'関係探索',rebuild:'理解更新'}[theme[2]];open=()=>openTheme(id);}
+  else if(capture){const id=capture[1];label=capture[2]==='ask'?'回答生成':'知見抽出';open=()=>openCapture(id);}
+  else if(imported){label='知見抽出';open=()=>openImport(imported[1]);}
+  else if(path==='/api/research'||research){label='調査';open=result=>(research?.[1]||result?.id)?openResearch(research?.[1]||result.id):Promise.resolve();}
+  else if(path==='/api/graph/rebuild'){label='関係整理';open=()=>openCapture(data.capture_ids?.[0]);}
+  else if(path==='/api/book/discover'){
+    label='統合探索';const isTheme=currentView?.theme;
+    open=async result=>{await (isTheme?openTheme(data.id):openCapture(data.id));if(result)showRelated(result,{id:data.id,kind:isTheme?'theme':'capture'});};
+  }else if(path==='/api/book/integrate'){label='統合';open=result=>result?.theme_id?openTheme(result.theme_id):Promise.resolve();}
+  else if(path.startsWith('/api/book/integration-proposals')){label=path.endsWith('/execute')?'統合':'統合探索';open=()=>home();}
+  else if(path==='/api/theme-changes'||path==='/api/concept-edits'){label='整理案作成';open=result=>path==='/api/concept-edits'&&result?showConceptEdit(result):home();}
+  else if(path==='/api/captures')open=result=>result?.id?openCapture(result.id):home();
+  else if(path==='/api/imports')open=result=>result?.id?openImport(result.id):home();
+  const descriptor={...spec,label,detail:data.question||$('#app h1')?.textContent||label,open,...options.aiActivity};
   const openResult=descriptor.open;
-  descriptor.open=result=>{if(uploading)throw Error('資料の送信が終わってから開いてください。');closeDialog();return openResult(result);};
+  if(openResult)descriptor.open=result=>{if(uploading)throw Error('資料の送信が終わってから開いてください。');closeDialog();return openResult(result);};
   return descriptor;
 }
 async function refreshAiActivity(){
   if(!state||document.hidden||aiPollBusy)return;
   aiPollBusy=true;
   try{
-    const result=await deviceRequest('/api/ai-activity');aiActivity.remote(result.active?result.count||1:0);
-    await Promise.all([...aiWatches].map(async([id,task])=>{
-      try{const job=await task.watch(task.result);if(!job||aiWatches.get(id)!==task)return;
-        if(['completed','failed','blocked','canceled','superseded','waiting'].includes(job.state)){
-          aiWatches.delete(id);aiActivity.update(id,{state:job.state==='superseded'?'blocked':job.state,error:errors[job.error_code]||job.error||'',cancel:null});
-        }else aiActivity.update(id,{state:job.state==='pending'?'pending':'running'});
-      }catch{/* A polling failure is not proof that AI finished. */}
-    }));
-  }
-  catch{/* Advisory only: normal requests surface connectivity errors. */}
+    aiOperations.activate(state.scope);
+    await aiOperations.refresh();
+    const result=await deviceRequest('/api/ai-activity',{cache:'no-store'});aiActivity.remote(result.active?result.count||1:0);
+  }catch{/* Status failures never prove that AI finished or stopped. */}
   finally{aiPollBusy=false;}
 }
 function confirmAiExecution(descriptor){
@@ -120,29 +98,15 @@ function confirmAiExecution(descriptor){
 async function api(path,options={}){
   const descriptor=aiDescriptor(path,options);
   const approved=options[confirmedTextAction]?.delete(path);
-  if(descriptor&&!approved&&!await confirmAiExecution(descriptor))throw new Error('');
-  const taskId=descriptor?aiActivity.start(descriptor):null;
-  const {aiActivity:activityOptions,[confirmedTextAction]:approval,...requestOptions}=options;
+  if(descriptor&&descriptor.mode!=='ingestion'&&!approved&&!await confirmAiExecution(descriptor))throw new Error('');
+  const {aiActivity:activityOptions,[confirmedTextAction]:approval,[aiOperationContext]:operation,...requestOptions}=options;
   try{
-    const result=await deviceRequest(path,requestOptions);
-    if(taskId){
-      if(result.local)aiActivity.update(taskId,{state:'offline',result});
-      else if(descriptor.watch){
-        aiWatches.set(taskId,{...descriptor,result});
-        const research=/^\/api\/research(?:\/([^/]+)\/retry)?$/.exec(path);
-        const stop=descriptor.cancel?()=>descriptor.cancel(result):research?()=>deviceRequest(`/api/research/${research[1]||result.id}/cancel`,json('POST',{})):null;
-        const cancel=stop?async()=>{await stop();aiWatches.delete(taskId);}:null;
-        aiActivity.update(taskId,{state:'pending',result,cancel});refreshAiActivity();
-      }else{
-        const failed=['failed','blocked'].includes(result.state)||result.proposals?.some(p=>p.state==='failed');
-        aiActivity.update(taskId,{state:failed?'failed':'completed',result,error:result.error||''});
-        refreshAiActivity();
-      }
-    }
+    aiOperations.activate(state?.scope);
+    const result=descriptor?await aiOperations.execute(path,requestOptions,descriptor,operation):await deviceRequest(path,requestOptions);
+    if(descriptor)refreshAiActivity();
     return result;
   }catch(error){
-    if(taskId)aiActivity.update(taskId,{state:'failed',error:error.message});
-    if([401,403].includes(error.status)&&path!=='/api/login'){aiActivity.clear();aiWatches.clear();clearDrilldowns();closeDialog();login();}throw error;
+    if([401,403].includes(error.status)&&path!=='/api/login'){aiOperations.clear();clearDrilldowns();closeDialog();login();}throw error;
   }
 }
 
@@ -192,7 +156,7 @@ function wireHeader() {
   if($('#search-origin'))$('#search-origin').value=searchFilters.origin;for(const key of ['source','year','origin'])bind(`#search-${key}`,'input',event=>{searchFilters[key]=event.target.value;clearTimeout(searchTimer);searchTimer=setTimeout(async()=>{try{state=await api(searchPath());renderFeed();}catch(e){showNotice(e.message);}},400);});
   bind('#privacy', 'click', privacyDialog);
   bind('#device-menu','click',devicePendingDialog);
-  bind('#logout', 'click', async () => { try { const result=await api('/api/logout', json('POST', {})); aiActivity.clear();aiWatches.clear();clearDrilldowns();await lockDevice();if(result.redirect){location.assign(result.redirect);return;}login(); } catch (e) { showNotice(e.message); } });
+  bind('#logout', 'click', async () => { try { const result=await api('/api/logout', json('POST', {})); aiOperations.clear();clearDrilldowns();await lockDevice();if(result.redirect){location.assign(result.redirect);return;}login(); } catch (e) { showNotice(e.message); } });
 }
 
 async function home() {
@@ -385,38 +349,40 @@ async function saveUpload(file, text, target, reuse = null) {
 }
 
 async function findSavedTextRelations(captureId){
+  let operation;
   try{
     await openCapture(captureId);
-    const version=currentCapture.version;
-    const extractPath=`/api/captures/${captureId}/extract`;
+    const version=currentCapture.version,extractPath=`/api/captures/${captureId}/extract`;
     const approval=new Set([extractPath,'/api/book/discover']);
+    operation=aiOperations.start({...aiDescriptor(extractPath,json('POST',{version})),label:'知見抽出・関連探索'}, {path:extractPath,workflow:'text-discovery'});
     if(!currentCapture.harvest){
-      await api(extractPath,{...json('POST',{version}),[confirmedTextAction]:approval});
+      await api(extractPath,{...json('POST',{version}),[confirmedTextAction]:approval,[aiOperationContext]:operation});
       showNotice('文章を残しました。読み取り後に関連候補を探します。');
     }
     for(let attempt=0;attempt<120;attempt++){
-      // Navigating away, changing the record or stopping extraction ends this plan.
-      // No search plan is persisted or resumed on reload or reconnection.
-      if(currentCapture?.id!==captureId||currentCapture.version!==version)return;
+      // The continuation is only in this tab's memory, never resumed on reload.
+      if(operation.stopRequested||operation.state==='canceled')throw Object.assign(Error(operation.state==='canceled'?'AI処理を停止しました。':'停止結果は未確認です。処理状況から確認・再試行してください。'),{canceled:operation.state==='canceled'});
+      if(currentCapture?.id!==captureId||currentCapture.version!==version){await aiOperations.cancel(operation);return;}
       const c=await api(`/api/captures/${captureId}`);
-      if(currentCapture?.id!==captureId||c.version!==version)return;
+      if(currentCapture?.id!==captureId||c.version!==version){await aiOperations.cancel(operation);return;}
       if(c.harvest){
         await openCapture(captureId);
         const button=$('#find-related');if(button)button.disabled=true;
         try{
-          const run=await api('/api/book/discover',{...json('POST',{id:captureId,version,search_mode:'ai_expanded',idempotency_key:crypto.randomUUID()}),[confirmedTextAction]:approval});
+          const run=await api('/api/book/discover',{...json('POST',{id:captureId,version,search_mode:'ai_expanded',idempotency_key:crypto.randomUUID()}),[confirmedTextAction]:approval,[aiOperationContext]:operation});
           if(currentCapture?.id===captureId&&currentCapture.version===version)showRelated(run,c);
         }finally{if(button?.isConnected)button.disabled=false;}
         return;
       }
       if(!['pending','running'].includes(c.job?.state)){
-        await openCapture(captureId);
+        await refreshAiActivity();await openCapture(captureId);
         showNotice('文章は保存済みです。'+(errors[c.job?.error_code]||'読み取りを完了できませんでした。記録から再試行できます。'));
         return;
       }
       await new Promise(resolve=>setTimeout(resolve,1500));
     }
-    showNotice('文章は保存済みです。読み取りが終わったら「関連を探す」を押してください。');
+    await aiOperations.cancel(operation);
+    showNotice('文章は保存済みです。関連探索を再開するときは記録から実行してください。');
   }catch(error){showNotice('文章は保存済みです。'+(error.message||'関連探索は記録から実行できます。'));}
 }
 
@@ -468,7 +434,7 @@ function renderCapture() {
     <details class="fold"><summary>訂正・補足など</summary><div class="secondary-links"><button id="correct">読み取り・出典を訂正</button><button id="supplement">写真・音声を補足</button>
       ${h ? '<button id="ask">この資料について聞く</button><button id="hide-revisit">再訪候補に表示しない</button>' : ''}${['failed','blocked'].includes(c.job?.state)&&c.job?.error_code!=='extraction_required' ? '<button id="retry">読み取りを再試行</button>' : ''}<button id="delete" class="danger">この記録を削除</button></div></details></article>`;
   wireHeader(); wireThemeLinks(); bind('#back', 'click', () => home().catch(e => showNotice(e.message)));
-  bind('#cancel-extraction','click',async()=>{try{await api(`/api/captures/${c.id}/cancel-extraction`,json('POST',{version:c.version}));await openCapture(c.id);}catch(e){showNotice(e.message);}});
+  bind('#cancel-extraction','click',async()=>{try{const operation=aiOperations.find(`/api/captures/${c.id}/extract`)||aiOperations.find(`/api/captures/${c.id}/retry`);if(operation)await aiOperations.cancel(operation);else await api(`/api/captures/${c.id}/cancel-extraction`,json('POST',{version:c.version}));await openCapture(c.id);}catch(e){showNotice(e.message);}});
   bind('#extract','click',async event=>{event.target.disabled=true;try{await api(`/api/captures/${c.id}/extract`,json('POST',{version:c.version}));await openCapture(c.id);}catch(e){showNotice(e.message);event.target.disabled=false;}});
   bind('#find-related','click',async event=>{event.target.disabled=true;try{const r=await api('/api/book/discover',json('POST',{id:c.id,version:c.version,search_mode:$('#discovery-search-mode').value,idempotency_key:crypto.randomUUID()}));showRelated(r,c);}catch(e){showNotice(e.message);}finally{event.target.disabled=false;}});
   if(h)api(`/api/book/discovery?anchor=${encodeURIComponent(c.id)}`).then(r=>{if(currentCapture?.id===c.id&&r)showRelated(r,c);}).catch(()=>{});
@@ -634,7 +600,7 @@ async function start(){
 }
 start().catch(error => { if (![401,403].includes(error.status)) { app.innerHTML = '<p class="loading">接続を確認して、ページを開き直してください。</p>'; } });
 
-const importState=value=>({pending:'保存済み・取り込み待ち',running:'取り込み中',ready:'範囲を選択できます',completed:'取り込み済み',partial:'一部失敗・成功分は保存済み',failed:'取り込みできませんでした'})[value]||value;
+const importState=value=>({pending:'保存済み・取り込み待ち',running:'取り込み中',ready:'範囲を選択できます',completed:'取り込み済み',partial:'一部失敗・成功分は保存済み',failed:'取り込みできませんでした',canceled:'停止済み'})[value]||value;
 async function saveImport(files,reuse=null){
  if(uploading)return;if(files.length>12||files.some(f=>f.size>10*1024*1024)||files.reduce((n,f)=>n+f.size,0)>20*1024*1024){$('#capture-error').textContent='1ファイル10MB、合計20MB、写真12枚までです。';return;}
  const pending=reuse||{files,key:crypto.randomUUID()};uploading=true;dialog.querySelectorAll('button,input,select').forEach(el=>el.disabled=true);$('#capture-error').textContent='原ファイルを保存しています。';
@@ -644,12 +610,13 @@ async function saveImport(files,reuse=null){
 async function openImport(jobId){
  const job=await api(`/api/imports/${jobId}`);currentCapture=null;currentView={id:jobId,import:true};
  app.innerHTML=`${header(false)}<button id="back" class="back">← 残したもの</button><article><div class="detail-head"><p class="eyebrow">取り込み</p><h1>${esc(job.metadata.title||job.name)}</h1><p class="status">${esc(importState(job.state))}</p><p class="subtle">保存 ${job.items.filter(i=>i.capture_id).length}件 ／ 選択 ${job.items.filter(i=>i.selected).length}件 ／ 範囲 ${job.items.length}件</p></div>
- ${job.error_code==='extraction_required'?'<button id="import-extract" class="primary">抽出する · AI</button>':''}
+ ${importExtractionLabel(job)?`<button id="import-extract" class="primary">${esc(importExtractionLabel(job))}</button>`:''}
  ${job.metadata.warnings?.length?`<details class="fold"><summary>取得できない範囲</summary>${job.metadata.warnings.map(w=>`<p class="subtle">${esc(w)}</p>`).join('')}</details>`:''}
  ${['pdf','epub'].includes(job.format)&&job.items.length?`<form id="import-select"><p class="subtle">保存したい範囲だけ選択します。1回20件まで。選択しただけではAIを実行せず、各記録から「AIで抽出する」を押した場合だけ送信します。</p>${job.items.map(i=>`<details class="fold"><summary>${i.state==='deleted'?'削除済み':esc(i.locator||`範囲 ${i.ordinal}`)}${i.capture_id?' · 保存済み':''}</summary><p class="prose">${esc(i.preview||'本文取得不能')}</p>${i.state!=='deleted'&&!i.capture_id&&i.preview?`<label><input type="checkbox" name="ordinal" value="${i.ordinal}"> この範囲を取り込む</label>`:''}${i.capture_id?`<a href="#" data-import-capture="${i.capture_id}">知見と原文を読む</a>`:''}</details>`).join('')}<p id="import-error" class="error" role="alert"></p><button class="primary">選んだ範囲を残す</button></form>`:job.items.map(i=>`<div class="history"><p>${esc(i.locator||`項目 ${i.ordinal}`)} · ${esc(i.state==='saved'?'保存済み':i.state==='deleted'?'削除済み':i.state==='failed'?'失敗':'待機')}</p>${i.capture_id?`<a href="#" data-import-capture="${i.capture_id}">知見と原資料を読む</a>`:''}${i.error_code?`<p class="error">${esc(i.error_code)}</p>`:''}</div>`).join('')}
  ${job.format==='photos'?`<details class="fold"><summary>写真の順序を訂正</summary><form id="import-order"><label><span>写真番号を表示順に並べる</span><input id="import-order-list" value="${job.items.map(i=>i.ordinal).join(', ')}"></label><button class="quiet">順序を反映する</button></form></details>`:''}
  <details class="fold"><summary>原ファイル・再試行・削除</summary>${job.format!=='photos'?`<p><a href="/api/imports/${job.id}/original" download>原ファイルを保存</a></p>`:''}${['failed','partial'].includes(job.state)?'<button id="import-retry" class="quiet">失敗分を再試行</button>':''}<button id="import-delete" class="quiet danger">取り込みと関連記録を削除</button></details></article>`;
  wireHeader();bind('#back','click',()=>home().catch(e=>showNotice(e.message)));document.querySelectorAll('[data-import-capture]').forEach(el=>el.onclick=event=>{event.preventDefault();openCapture(el.dataset.importCapture).catch(e=>showNotice(e.message));});
+ bind('#import-extract','click',async event=>{event.target.disabled=true;try{await api(`/api/imports/${job.id}/extract`,json('POST',{}));await openImport(job.id);}catch(e){showNotice(e.message);event.target.disabled=false;}});
  bind('#import-select','submit',async event=>{event.preventDefault();try{const ordinals=[...event.target.querySelectorAll('input:checked')].map(x=>Number(x.value));await api(`/api/imports/${job.id}/select`,json('POST',{ordinals}));await openImport(job.id);}catch(e){$('#import-error').textContent=e.message;}});
  bind('#import-order','submit',async event=>{event.preventDefault();try{await api(`/api/imports/${job.id}/order`,json('POST',{ordinals:$('#import-order-list').value.split(',').map(x=>Number(x.trim()))}));await openImport(job.id);}catch(e){showNotice(e.message);}});
  bind('#import-retry','click',async()=>{try{await api(`/api/imports/${job.id}/retry`,json('POST',{}));await openImport(job.id);}catch(e){showNotice(e.message);}});
@@ -696,7 +663,7 @@ async function downloadDevice(){try{const blob=await exportDevice(),url=URL.crea
 function confirmDiscard(operationId){modal('未送信の原資料を削除する',`<p>この端末にしかない原資料や編集を${operationId?'1件':'すべて'}削除します。まだ保存先へ届いていない内容は戻せません。必要なら先に書き出してください。</p><button id="discard-export" class="quiet">未送信の原資料を書き出す</button><p id="discard-error" class="error"></p><button id="discard-confirm" class="primary">端末から削除する</button>`);bind('#discard-export','click',downloadDevice);bind('#discard-confirm','click',async()=>{try{if(operationId)await discardOperation(operationId);else await discardAllOutbox();closeDialog();await home();}catch(e){$('#discard-error').textContent=e.message;}});}
 async function devicePendingDialog(){try{const pending=await pendingOperations();modal('端末の保存状況',`<p class="subtle">${navigator.onLine?'接続がある間、自動で送信します。':'接続後、またはアプリを開き直したときに自動で送信します。'}原資料の送信と知見化は別の状態です。</p>${pending.map(o=>{let value;try{value=o.body.kind==='text'?JSON.parse(o.body.text):null;}catch{}return `<details class="fold"><summary>${o.state==='conflict'?'競合・端末の内容を保持':'端末に保存・未送信'} · ${date(o.created_at)}</summary><p>${esc(o.error||'接続後に続行します。')}</p>${value?`<p class="prose">${esc(value.body||value.note||value.corrected_text||value.text||value.url||value.question||'削除の同期待ち')}</p>`:`<p>${o.body.entries.filter(([k,v])=>typeof v!=='string').map(([k,v])=>esc(v.name)).join('、')}</p>`}${o.server?`<p class="origin">保存先の現行版 · 第${o.server.version}版</p><p class="prose">${esc(o.server.body||o.server.note||o.server.corrected_text||o.server.original_text||'')}</p>`:''}${o.state==='conflict'&&o.method==='PATCH'&&o.server?.version?`<button class="quiet" data-resolve="${o.id}">端末の編集を確認して現行版へ反映</button>`:''}<button class="quiet danger" data-discard-operation="${o.id}">この未送信データを削除</button></details>`;}).join('')||'<p>この保存先の未送信データはありません。</p>'}<button id="pending-export" class="quiet">未送信の原資料を書き出す</button>`);bind('#pending-export','click',downloadDevice);document.querySelectorAll('[data-discard-operation]').forEach(el=>el.onclick=()=>confirmDiscard(el.dataset.discardOperation));document.querySelectorAll('[data-resolve]').forEach(el=>el.onclick=()=>{const op=pending.find(o=>o.id===el.dataset.resolve),local=JSON.parse(op.body.text),isView=op.path.includes('/views/');modal('現行版に端末の編集を反映する',`<form id="resolve-form"><p>第${op.server.version}版の本文・メモを確認し、残したい内容を編集してください。保存先がさらに変われば再び競合として保持します。</p><label><span>${isView?'見方の本文':'訂正した本文'}</span><textarea id="resolve-body">${esc(isView?local.body??op.server.body:local.corrected_text??op.server.corrected_text??op.server.original_text)}</textarea></label><label><span>${isView?'変更理由':'自分の一言'}</span><textarea id="resolve-note">${esc(isView?local.reason||'端末の編集を現行版へ反映':local.note??op.server.note)}</textarea></label><p id="resolve-error" class="error"></p><button class="primary">現行版へ反映する</button></form>`);bind('#resolve-form','submit',async event=>{event.preventDefault();try{await resolveConflict(op.id,isView?{body:$('#resolve-body').value,reason:$('#resolve-note').value}:{corrected_text:$('#resolve-body').value,note:$('#resolve-note').value});closeDialog();await home();}catch(e){$('#resolve-error').textContent=e.message;}});});}catch(e){showNotice(e.message);}}
 window.addEventListener('device-cache-error',e=>showNotice(e.detail));
-window.addEventListener('device-auth-expired',()=>{closeDialog();login();showNotice('未送信の原資料は端末に残っています。もう一度開いて続けてください。');});
+window.addEventListener('device-auth-expired',()=>{aiOperations.clear();clearDrilldowns();closeDialog();login();showNotice('未送信の原資料は端末に残っています。もう一度開いて続けてください。');});
 window.addEventListener('device-sync',async()=>{if(!state||dialog.open||uploading)return;try{if(!currentCapture&&!currentView){state=await api(searchPath());renderFeed();}else if(currentCapture?.local_only){currentCapture=await api(`/api/captures/${currentCapture.id}`);renderCapture();}}catch(e){if(e.status!==401)showNotice(e.message);}});
 initDevice().then(()=>resume()).catch(e=>showNotice(e.message));
 
@@ -765,7 +732,7 @@ function showRelated(run,c){
  target.innerHTML=`${run.candidates.length?run.candidates.map(x=>`<label><input type="checkbox" data-related-select="${esc(x.id)}" ${selected.includes(x.id)?'checked':''}> ${esc(x.title)}<br><span class="subtle">${labels[x.relation]} · ${esc(x.reason)}</span></label><details class="fold"><summary>内容</summary><p class="prose">${esc(x.text)}</p><a href="#" data-related-open="${esc(x.id)}">記録を開く</a></details>`).join(''):'<p class="subtle">有用な関連は見つかりませんでした。</p>'}<p class="subtle">${esc(run.destination.question)}</p>${run.retained_evidence?.length?`<details class="fold"><summary>引き継ぐ既存根拠（${run.retained_evidence.length}件）</summary>${run.retained_evidence.map(e=>`<p>${esc(e.title)}</p>`).join('')}</details>`:''}${c.kind==='theme'?'<select id="integration-mode" aria-label="統合先"><option value="auto">AIの提案に従う</option><option value="deepen">この問いへ集約する</option><option value="parent">新しい問いへつなぐ</option></select>':''}<button id="integrate-related" class="primary"></button>`;
  const ids=()=>[...target.querySelectorAll('[data-related-select]:checked')].map(x=>x.dataset.relatedSelect);
  const update=()=>{sessionStorage.setItem(storageKey,JSON.stringify(ids()));$('#integrate-related').textContent=`${1+ids().length}件を統合する`;$('#integrate-related').disabled=c.kind==='theme'&&ids().length===0;};target.querySelectorAll('[data-related-select]').forEach(x=>x.addEventListener('change',update));update();target.querySelectorAll('[data-related-open]').forEach(x=>x.addEventListener('click',e=>{e.preventDefault();x.dataset.relatedOpen.startsWith('theme:')?openTheme(x.dataset.relatedOpen):openCapture(x.dataset.relatedOpen);}));
- bind('#integrate-related','click',async event=>{event.target.disabled=true;const selectedIds=ids();const mode=$('#integration-mode')?.value==='auto'?undefined:$('#integration-mode')?.value;const actionKey=`integration:${run.id}:${mode||''}:${selectedIds.slice().sort().join(',')}`;let key=sessionStorage.getItem(actionKey);if(!key){key=crypto.randomUUID();sessionStorage.setItem(actionKey,key);}try{const r=await api('/api/book/integrate',json('POST',{discovery_id:run.id,selected_ids:selectedIds,...mode?{mode}:{},idempotency_key:key}));if(r.state==='completed')await openTheme(r.theme_id);else showNotice('処理中、または中断しています。');}catch(e){showNotice(e.message);}finally{event.target.disabled=false;}});
+ bind('#integrate-related','click',async event=>{event.target.disabled=true;const selectedIds=ids();const mode=$('#integration-mode')?.value==='auto'?undefined:$('#integration-mode')?.value;const attempt=createIntegrationAttempt(sessionStorage,integrationActionKey(run.id,mode,selectedIds));try{const r=await api('/api/book/integrate',{...json('POST',{discovery_id:run.id,selected_ids:selectedIds,...mode?{mode}:{},idempotency_key:attempt.key}),aiActivity:{integrationRetry:attempt.retry}});attempt.settle(r);if(r.state==='completed')await openTheme(r.theme_id);else showNotice('処理中、または中断しています。');}catch(e){attempt.settle(e);showNotice(e.message);}finally{event.target.disabled=false;}});
 }
 
 let proposalGenerationKey=null,proposalBusy=false,proposalReadVersion=0;

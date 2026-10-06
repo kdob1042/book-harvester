@@ -1,3 +1,5 @@
+import {cancellationCleanup} from './ai-cancellation.ts';
+import {commitAIResult} from './ai-cancellation.ts';
 import {oppositionLinks} from './question-relations.ts';
 import {drilldownLinks} from './drilldown.ts';
 import {questionContent,questionContext} from './question-context.ts';
@@ -20,6 +22,7 @@ const norm=(v:string)=>v.normalize('NFKC').replace(/\s+/g,' ').trim();
 export function membershipJobStatement(env:Env,cap:string,v:number,guard='1',values:(string|number|null)[]=[]){return stmt(env,`INSERT INTO theme_jobs(id,kind,target_id,version,available_at,created_at) SELECT ?,'membership',?,?,?,? WHERE ${guard} ON CONFLICT(kind,target_id) DO UPDATE SET version=excluded.version,state=CASE WHEN theme_jobs.state='running' THEN 'running' ELSE 'pending' END,attempts=CASE WHEN theme_jobs.state='running' THEN theme_jobs.attempts ELSE 0 END,available_at=excluded.available_at,dispatched_at=NULL,error_code=NULL`,id(),cap,v,now(),now(),...values);}
 export async function dirty(env:Env,themeIds:string[],explicit=false){if(!automaticAI(env)&&!explicit)return;for(const t of new Set(themeIds))await stmt(env,`INSERT INTO theme_jobs(id,kind,target_id,version,available_at,created_at) VALUES(?,'synthesis',?,1,?,?) ON CONFLICT(kind,target_id) DO UPDATE SET version=version+1,state=CASE WHEN state='running' THEN 'running' ELSE 'pending' END,attempts=CASE WHEN state='running' THEN attempts ELSE 0 END,available_at=excluded.available_at,dispatched_at=NULL,error_code=NULL`,id(),t,now()+themeLimits.debounceMs,now()).run();}
 export async function dispatchThemes(env:Env){
+ env=cancellationCleanup(env);
  const time=now(),paused=await stmt(env,"SELECT value FROM settings WHERE key='theme_backfill_paused'").first<string>('value');
  await env.DB.batch([
  stmt(env,`UPDATE theme_jobs SET state=CASE WHEN attempts>=3 THEN 'failed' ELSE 'pending' END,error_code='worker_interrupted',lease_token=NULL,dispatched_at=NULL WHERE state='running' AND lease_until<?`,time),
@@ -44,13 +47,14 @@ async function processMembership(env:Env,j:ThemeJob,fetcher?:typeof fetch){
  const values=[j.id,j.version,j.lease_token,c.id,c.version,JSON.stringify(c.harvest)],statements:D1PreparedStatement[]=[];
  if(result.candidate&&result.memberships.length<3){const k=result.candidate,themeId=`candidate:${await digest(norm(k.question)+'\n'+norm(k.scope))}`;const existing=await stmt(env,'SELECT id,state FROM themes WHERE id=?',themeId).first<{id:string;state:string}>();const count=await stmt(env,"SELECT count(*) AS n FROM themes WHERE state='candidate'").first<{n:number}>();if(existing||(count?.n||0)<themeLimits.themeCandidates){statements.push(stmt(env,`INSERT OR IGNORE INTO themes(id,question,scope,exclusions,state,created_by,created_at) SELECT ?,?,?,?,'candidate','ai',? WHERE ${guard}`,themeId,k.question,k.scope,k.exclusions,now(),...values));for(const d of k.domain_ids)statements.push(stmt(env,`INSERT OR IGNORE INTO theme_domains SELECT ?,? WHERE ${guard}`,themeId,d,...values));result.memberships.push({theme_id:themeId,claim_ids:k.claim_ids,reason:k.reason,role:'unresolved'});}}
  const same=JSON.stringify(before.map(m=>[m.theme_id,m.capture_version,m.claim_ids,m.role,m.fingerprint]).sort())===JSON.stringify(result.memberships.map((m:{theme_id:string;claim_ids:string[];role:string})=>[m.theme_id,c.version,JSON.stringify(m.claim_ids),m.role,fingerprint]).sort());
- if(same){await stmt(env,`UPDATE theme_jobs SET state='completed',lease_token=NULL,error_code=NULL WHERE id=? AND ${guard}`,j.id,...values).run();return;}
+ if(same){await commitAIResult(env,[stmt(env,`UPDATE theme_jobs SET state='completed',lease_token=NULL,error_code=NULL WHERE id=? AND ${guard}`,j.id,...values)]);return;}
  statements.push(stmt(env,`DELETE FROM theme_memberships WHERE capture_id=? AND ${guard}`,c.id,...values));
  for(const m of result.memberships)statements.push(stmt(env,`INSERT INTO theme_memberships(theme_id,capture_id,capture_version,claim_ids,reason,role,fingerprint,processing_version,created_at) SELECT ?,?,?,?,?,?,?,'theme-membership/v1',? WHERE ${guard} AND NOT EXISTS(SELECT 1 FROM theme_overrides WHERE theme_id=? AND item_key=? AND action='hidden')`,m.theme_id,c.id,c.version,JSON.stringify(m.claim_ids),m.reason,m.role,fingerprint,now(),...values,m.theme_id,`capture:${c.id}`));
  statements.push(stmt(env,`UPDATE theme_jobs SET state='completed',lease_token=NULL,error_code=NULL WHERE id=? AND ${guard}`,j.id,...values));
  for(const m of result.memberships)for(const lens of m.lens_ids||[])statements.splice(statements.length-1,0,stmt(env,`INSERT OR IGNORE INTO theme_member_lenses SELECT ?,?,? WHERE ${guard} AND EXISTS(SELECT 1 FROM theme_memberships WHERE theme_id=? AND capture_id=?)`,m.theme_id,c.id,lens,...values,m.theme_id,c.id));
- const saved=await env.DB.batch(statements);if(!saved.at(-1)?.meta.changes){await retryChanged(env,j);return;}
- await stmt(env,`UPDATE themes SET state='active',version=version+1 WHERE state='candidate' AND (SELECT count(DISTINCT fingerprint) FROM current_theme_memberships m WHERE m.theme_id=themes.id)>=? AND (SELECT count(*) FROM themes WHERE state='active')<?`,themeLimits.activationEvidence,themeLimits.activeThemes).run();
+ // Membership activation is part of its result, before the terminal job write.
+ statements.splice(statements.length-1,0,stmt(env,`UPDATE themes SET state='active',version=version+1 WHERE state='candidate' AND (SELECT count(DISTINCT fingerprint) FROM current_theme_memberships m WHERE m.theme_id=themes.id)>=? AND (SELECT count(*) FROM themes WHERE state='active')<? AND ${guard}`,themeLimits.activationEvidence,themeLimits.activeThemes,...values));
+ const saved=await commitAIResult(env,statements);if(!saved.at(-1)?.meta.changes){await retryChanged(env,j);return;}
  if(automaticAI(env))await stmt(env,`UPDATE graph_jobs SET state='pending',attempts=0,available_at=?,dispatched_at=NULL WHERE capture_id=? AND version=? AND state='completed'`,now(),c.id,c.version).run();
 }
 export async function relevantViews(env:Env,themeIds:string[],terms:string[]=[],captureIds:string[]=[]){
@@ -77,9 +81,9 @@ export async function synthesisInput(env:Env,themeId:string){
 }
 async function retryChanged(env:Env,j:ThemeJob){await stmt(env,`UPDATE theme_jobs SET state='pending',attempts=0,lease_token=NULL,dispatched_at=NULL,available_at=?,error_code='theme_context_changed' WHERE id=? AND lease_token=?`,now()+15000,j.id,j.lease_token).run();}
 async function processSynthesis(env:Env,j:ThemeJob,fetcher?:typeof fetch){
- const input=await synthesisInput(env,j.target_id);if(input.theme.state!=='active'){await stmt(env,"UPDATE theme_jobs SET state='completed',lease_token=NULL WHERE id=? AND lease_token=?",j.id,j.lease_token).run();return;}
+ const input=await synthesisInput(env,j.target_id);if(input.theme.state!=='active'){await commitAIResult(env,[stmt(env,"UPDATE theme_jobs SET state='completed',lease_token=NULL WHERE id=? AND lease_token=?",j.id,j.lease_token)]);return;}
  const fingerprint=await digest(JSON.stringify({theme:input.theme,claims:input.claims,views:input.views,dependencies:input.dependencies,analysis_drafts:input.analysis_drafts}));
- const old=await stmt(env,'SELECT input_fingerprint FROM theme_revisions WHERE id=?',input.previous_id).first<{input_fingerprint:string}>();if(old?.input_fingerprint===fingerprint){await stmt(env,"UPDATE theme_jobs SET state='completed',lease_token=NULL WHERE id=? AND version=? AND lease_token=?",j.id,j.version,j.lease_token).run();return;}
+ const old=await stmt(env,'SELECT input_fingerprint FROM theme_revisions WHERE id=?',input.previous_id).first<{input_fingerprint:string}>();if(old?.input_fingerprint===fingerprint){await commitAIResult(env,[stmt(env,"UPDATE theme_jobs SET state='completed',lease_token=NULL WHERE id=? AND version=? AND lease_token=?",j.id,j.version,j.lease_token)]);return;}
  let result:Synthesis,usedModel='none';try{if(input.claims.length){const ai=await response(env,'theme_synthesis_v1',synthesisSchema,synthesisInstructions+' 会話案analysis_draftsはAI仮説であり独立した証拠ではない。原claimsに裏付けられない説明を確定せず、未検証の問いとして扱う。',input,fetcher);usedModel=ai.model;result=validateSynthesis(ai.value,input) as Synthesis;}else result={changed:true,change_reason:'現在有効な原根拠がなくなったため、説明を保留しました。',understanding:[],changes:[],competing:[],conditions:[],questions:[],relations:[],theme_relations:[],view_proposal:null};}catch(e){if(e instanceof AiError)throw e;throw new AiError('invalid_theme_output');}
  // Preserve wording on no semantic change while accepting additional grounded references.
  if(!result.changed&&input.previous){for(const key of ['understanding','changes','competing','conditions','questions'] as const){const previous=input.previous[key];if(previous.some(x=>x.evidence.some(e=>!input.claims.some(c=>c.id===e.claim_id)))){result.changed=true;result.change_reason='根拠の変更を再評価しました。';break;}result[key]=previous.map(x=>({...x,evidence:result[key].find(y=>y.id===x.id)?.evidence||x.evidence}));}}
@@ -97,7 +101,7 @@ async function processSynthesis(env:Env,j:ThemeJob,fetcher?:typeof fetch){
  if(result.view_proposal){const p=result.view_proposal;const key=await proposalKey(p);statements.push(stmt(env,`INSERT INTO theme_proposals SELECT ?,?,?,?,?,?,?,?,?,'pending',? WHERE ${exists} AND NOT EXISTS(SELECT 1 FROM theme_overrides WHERE theme_id=? AND item_key=? AND action='hidden')`,id(),j.target_id,revision,p.view_id,p.base_version,p.from_text,p.to_text,p.reason,JSON.stringify({theme_id:j.target_id,revision_id:revision,dependencies:input.dependencies.map(({harvest,...d})=>d),evidence:p.evidence.map(e=>({...e,snapshot:claims.get(e.claim_id)}))}),now(),revision,j.target_id,key));}
  statements.push(stmt(env,`INSERT INTO theme_syntheses SELECT ?,?,? WHERE ${exists} ON CONFLICT(theme_id) DO UPDATE SET revision_id=excluded.revision_id,version=excluded.version`,j.target_id,revision,v,revision));
  statements.push(stmt(env,`UPDATE theme_jobs SET state='completed',lease_token=NULL,error_code=NULL WHERE id=? AND lease_token=? AND ${exists}`,j.id,j.lease_token,revision));
- const saved=await env.DB.batch(statements);if(!saved.at(-1)?.meta.changes)await retryChanged(env,j);
+ const saved=await commitAIResult(env,statements);if(!saved.at(-1)?.meta.changes)await retryChanged(env,j);
 }
 export async function processThemeJob(env:Env,jobId:string,fetcher?:typeof fetch){
  const permit=await stmt(env,'SELECT kind,target_id,version FROM theme_jobs WHERE id=?',jobId).first<{kind:string;target_id:string;version:number}>();if(!permit||!await allowedAI(env,permit.kind,permit.target_id,permit.version))return;

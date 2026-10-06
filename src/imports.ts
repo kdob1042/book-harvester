@@ -1,3 +1,6 @@
+import {cancellationCleanup} from './ai-cancellation.ts';
+import {commitAIResult} from './ai-cancellation.ts';
+import {renewTerminalJobOwner} from './ai-operation-jobs.ts';
 import {automaticAI} from './ai-policy.ts';
 import {boundedBody,digest,stmt,rows,id,now,fail,type Asset} from './core.ts';
 import {captureInput,requestKey,MAX_UPLOAD,type Input} from './input.ts';
@@ -53,11 +56,11 @@ export async function selectImport(env:Env,jobId:string,ordinals:number[]){
  const job=await stmt(env,'SELECT * FROM import_jobs WHERE id=?',jobId).first<ImportJob>();if(!job)fail(404,'取り込みがありません。');if(!['ready','completed','partial'].includes(job.state)||ordinals.length<1||ordinals.length>20||new Set(ordinals).size!==ordinals.length)fail(400,'取り込む範囲を1〜20件選んでください。');
  const all=await rows<Item>(env,'SELECT * FROM import_items WHERE job_id=?',jobId);
  if(ordinals.some(n=>!all.some(x=>x.ordinal===n&&x.state!=='deleted'&&(x.body.trim()||x.object_key))))fail(400,'本文を取得できる範囲を選んでください。');
- await env.DB.batch([...ordinals.map(n=>stmt(env,"UPDATE import_items SET selected=1,state=CASE WHEN capture_id IS NULL THEN 'available' ELSE state END,error_code=NULL WHERE job_id=? AND ordinal=? AND state<>'deleted'",jobId,n)),stmt(env,"UPDATE import_jobs SET state='pending',attempts=0,error_code=NULL,available_at=?,dispatched_at=NULL WHERE id=? AND state<>'running'",now(),jobId)]);
+ await renewTerminalJobOwner(env,'import',jobId,[...ordinals.map(n=>stmt(env,"UPDATE import_items SET selected=1,state=CASE WHEN capture_id IS NULL THEN 'available' ELSE state END,error_code=NULL WHERE job_id=? AND ordinal=? AND state<>'deleted'",jobId,n)),stmt(env,"UPDATE import_jobs SET state='pending',attempts=0,error_code=NULL,available_at=?,dispatched_at=NULL WHERE id=? AND state<>'running'",now(),jobId)]);
 }
 export async function startImportExtraction(env:Env,jobId:string){
  const job=await stmt(env,'SELECT id FROM import_jobs WHERE id=?',jobId).first();if(!job)fail(404,'import_missing');
- await env.DB.batch([stmt(env,`INSERT INTO explicit_ai_actions VALUES('extract_import',?,1,?) ON CONFLICT(kind,target_id) DO UPDATE SET created_at=excluded.created_at`,jobId,now()),stmt(env,"UPDATE import_jobs SET state='pending',attempts=0,error_code=NULL,available_at=?,dispatched_at=NULL WHERE id=? AND state IN('ready','failed','partial')",now(),jobId)]);
+ await renewTerminalJobOwner(env,'import',jobId,[stmt(env,`INSERT INTO explicit_ai_actions VALUES('extract_import',?,1,?) ON CONFLICT(kind,target_id) DO UPDATE SET created_at=excluded.created_at`,jobId,now()),stmt(env,"UPDATE import_jobs SET state='pending',attempts=0,error_code=NULL,available_at=?,dispatched_at=NULL WHERE id=? AND state IN('ready','failed','partial','canceled')",now(),jobId)]);
  return {id:jobId,state:'pending'};
 }
 export async function processImport(env:Env,jobId:string){
@@ -75,10 +78,11 @@ export async function processImport(env:Env,jobId:string){
   const selected=await rows<Item>(env,"SELECT * FROM import_items WHERE job_id=? AND selected=1 AND capture_id IS NULL AND state<>'deleted' ORDER BY ordinal LIMIT 20",job.id);let failed=0;
   for(const item of selected){try{await createItemCapture(env,job,item);const saved=await stmt(env,'SELECT capture_id FROM import_items WHERE id=?',item.id).first<{capture_id:string}>();if(saved?.capture_id){const c=await stmt(env,'SELECT version FROM captures WHERE id=?',saved.capture_id).first<{version:number}>();if(c)await startExtraction(env,{waitUntil:()=>{}} as unknown as ExecutionContext,saved.capture_id,c.version);}}catch(e){failed++;await stmt(env,"UPDATE import_items SET state='failed',error_code=? WHERE id=?",e instanceof Error?e.message:'item_failed',item.id).run();}}
   const more=await stmt(env,"SELECT count(*) AS n FROM import_items WHERE job_id=? AND selected=1 AND capture_id IS NULL AND state='available'",job.id).first<number>('n');
-  await stmt(env,"UPDATE import_jobs SET state=?,lease_token=NULL,dispatched_at=NULL,error_code=?,available_at=? WHERE id=? AND lease_token=?",more?'pending':failed?'partial':job.format==='pdf'||job.format==='epub'?'ready':'completed',failed?'some_items_failed':null,now(),job.id,token).run();
+  await commitAIResult(env,[stmt(env,"UPDATE import_jobs SET state=?,lease_token=NULL,dispatched_at=NULL,error_code=?,available_at=? WHERE id=? AND lease_token=?",more?'pending':failed?'partial':job.format==='pdf'||job.format==='epub'?'ready':'completed',failed?'some_items_failed':null,now(),job.id,token)]);
  }catch(e){await stmt(env,"UPDATE import_jobs SET state='failed',error_code=?,lease_token=NULL,dispatched_at=NULL WHERE id=? AND lease_token=?",e instanceof Error?e.message:'import_failed',job.id,token).run();}
 }
 export async function dispatchImports(env:Env){
+ env=cancellationCleanup(env);
  await stmt(env,"UPDATE import_jobs SET state=CASE WHEN attempts>=3 THEN 'failed' ELSE 'pending' END,lease_token=NULL,dispatched_at=NULL,error_code='worker_interrupted' WHERE state='running' AND lease_until<?",now()).run();
  for(const j of await rows<{id:string}>(env,"SELECT id FROM import_jobs WHERE state='pending' AND available_at<=? AND (dispatched_at IS NULL OR dispatched_at<?) LIMIT 5",now(),now()-300000)){
   const claimed=await stmt(env,"UPDATE import_jobs SET dispatched_at=? WHERE id=? AND state='pending' AND (dispatched_at IS NULL OR dispatched_at<?) RETURNING id",now(),j.id,now()-300000).first();if(!claimed)continue;
@@ -100,4 +104,8 @@ export async function reorderImport(env:Env,jobId:string,ordinals:number[]){
  const items=await rows<{ordinal:number}>(env,'SELECT ordinal FROM import_items WHERE job_id=?',jobId);
  if(ordinals.length!==items.length||new Set(ordinals).size!==items.length||ordinals.some(n=>!items.some(i=>i.ordinal===n)))fail(400,'すべての写真番号を一度ずつ指定してください。');
  await env.DB.batch(ordinals.map((n,index)=>stmt(env,'UPDATE import_items SET display_order=? WHERE job_id=? AND ordinal=?',index+1,jobId,n)));
+}
+
+export async function retryImport(env:Env,jobId:string){
+ await renewTerminalJobOwner(env,'import',jobId,[stmt(env,"UPDATE import_items SET state='available',error_code=NULL WHERE job_id=? AND state='failed' AND capture_id IS NULL",jobId),stmt(env,"UPDATE import_jobs SET state='pending',attempts=0,error_code=NULL,available_at=?,dispatched_at=NULL WHERE id=? AND state IN('failed','partial')",now(),jobId)]);
 }
