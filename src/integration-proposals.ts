@@ -1,3 +1,4 @@
+import {cancellationCleanup,isOperationCanceled,AIOperationCanceled,throwIfOperationCanceled,commitAIResult,nestedOperation} from './ai-cancellation.ts';
 import {stmt,rows,fail,digest,id,now,text} from './core.ts';
 import {integrateRecords} from './discovery.ts';
 import {capturePages,themeMaterial,current,type Material} from './knowledge-materials.ts';
@@ -35,17 +36,42 @@ export async function generateProposals(env:Env,args:Record<string,unknown>,fetc
  statements.push(stmt(env,"INSERT INTO discovery_runs VALUES(?,?,?,?,?,'completed',?,?,NULL,?)",discovery,proposal,await digest(sig),ms[0].id,ms[0].version,JSON.stringify({anchor:ms[0]}),JSON.stringify(found),now()));
  statements.push(stmt(env,"INSERT INTO integration_proposals(id,run_id,discovery_id,position,question,reason,materials_json,destination_id) VALUES(?,?,?,?,?,?,?,?)",proposal,run,discovery,position,p.question,p.reason,JSON.stringify(ms),p.theme_id));
  }
- statements.push(stmt(env,"UPDATE integration_proposal_runs SET state='completed' WHERE id=?",run));await env.DB.batch(statements);return readProposals(env,run);
- }catch(e){await stmt(env,"UPDATE integration_proposal_runs SET state='failed',error=? WHERE id=?",e instanceof Error?e.message:'proposal_failed',run).run();throw e;}
+ statements.push(stmt(env,"UPDATE integration_proposal_runs SET state='completed' WHERE id=? AND state='running'",run));await commitAIResult(env,statements);return readProposals(env,run);
+ }catch(e){const canceled=await isOperationCanceled(env);await stmt(cancellationCleanup(env),"UPDATE integration_proposal_runs SET state='failed',error=? WHERE id=? AND state='running'",canceled?new AIOperationCanceled().message:e instanceof Error?e.message:'proposal_failed',run).run();if(canceled)await throwIfOperationCanceled(env);throw e;}
 }
 export async function executeProposals(env:Env,args:Record<string,unknown>,fetcher?:typeof fetch){
  const run=await readProposals(env,String(args.run_id));const selected=args.selected_ids;if(!Array.isArray(selected)||!selected.length||selected.length>5||new Set(selected).size!==selected.length)fail(400,'統合案を選んでください。');
  const proposals=selected.map(pid=>run!.proposals.find((p:any)=>p.id===pid));if(proposals.some(p=>!p))fail(400,'保存した統合案を選んでください。');
  for(let i=0;i<proposals.length;i++)for(let j=i+1;j<proposals.length;j++)if(proposalConflict(proposals[i],proposals[j]))fail(409,'同じ問いを更新する案は一つずつ選んでください。');
- for(const p of proposals){if(p.state==='completed'||p.state==='running')continue;if(p.state==='failed'&&!args.retry)continue;
+ const lastActionable=proposals.findLastIndex(p=>p.state!=='completed'&&p.state!=='running'&&(p.state!=='failed'||args.retry));
+ let finished=false;
+ for(const [index,p] of proposals.entries()){await throwIfOperationCanceled(env);if(p.state==='completed'||p.state==='running')continue;if(p.state==='failed'&&!args.retry)continue;
+ const attempt=p.attempt+1,key=`proposal:${p.id}:${attempt}`;
  const claim=await stmt(env,"UPDATE integration_proposals SET state='running',attempt=attempt+1,error=NULL WHERE id=? AND state=? AND attempt=?",p.id,p.state,p.attempt).run();if(!claim.meta.changes)continue;
- try{const result=await integrateRecords(env,{discovery_id:p.discovery_id,selected_ids:p.materials.slice(1).map((m:any)=>m.id),idempotency_key:`proposal:${p.id}:${p.attempt+1}`},fetcher);await stmt(env,"UPDATE integration_proposals SET state='completed',result_json=? WHERE id=?",JSON.stringify(result),p.id).run();}
- catch(e){await stmt(env,"UPDATE integration_proposals SET state='failed',error=? WHERE id=?",e instanceof Error?e.message:'integration_failed',p.id).run();}
+ let final=false;
+ try{
+  // Finish the root with the final integration's result transaction. Earlier
+  // successes stay nested, so Stop can still prevent the remaining proposals.
+  final=index===lastActionable&&!await stmt(env,"SELECT 1 FROM integration_proposals WHERE run_id=? AND id<>? AND state IN ('failed','running')",run!.id,p.id).first();
+  const result=await integrateRecords(final?env:nestedOperation(env),{discovery_id:p.discovery_id,selected_ids:p.materials.slice(1).map((m:any)=>m.id),idempotency_key:key},fetcher);
+  if(result.state!=='completed')fail(409,'統合が完了していません。');
+  // For the final item the root is already terminal. This copies only the
+  // integration's committed result into its proposal receipt.
+  await stmt(final?cancellationCleanup(env):env,"UPDATE integration_proposals SET state='completed',result_json=?,error=NULL WHERE id=? AND state='running' AND attempt=?",JSON.stringify(result),p.id,attempt).run();
+  finished=final;
  }
- return readProposals(env,run!.id);
+ catch(e){
+  // An integration may have committed just before stop won the aggregate operation.
+  // Reconcile terminal bookkeeping from that exact saved attempt; never regenerate it.
+  const cleanup=cancellationCleanup(env),saved=await stmt(cleanup,'SELECT id,state,result_json FROM integration_runs WHERE request_key=?',key).first<any>();
+  const canceled=await isOperationCanceled(env);
+  if(saved?.state==='completed'&&saved.result_json){await stmt(cleanup,"UPDATE integration_proposals SET state='completed',result_json=?,error=NULL WHERE id=? AND state='running' AND attempt=?",JSON.stringify({id:saved.id,state:saved.state,...JSON.parse(saved.result_json)}),p.id,attempt).run();finished=final;}
+  else await stmt(cleanup,"UPDATE integration_proposals SET state='failed',error=? WHERE id=? AND state='running' AND attempt=?",canceled?new AIOperationCanceled().message:e instanceof Error?e.message:'integration_failed',p.id,attempt).run();
+  if(canceled)await throwIfOperationCanceled(env);
+ }
+ if(finished)break;
+ }
+ const result=await readProposals(env,run!.id);
+ if(!finished&&result&&!result.proposals.some((p:any)=>p.state==='failed'||p.state==='running'))await commitAIResult(env,[]);
+ return result;
 }

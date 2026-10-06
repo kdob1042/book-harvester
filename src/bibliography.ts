@@ -1,3 +1,4 @@
+import {cancellationCleanup} from './ai-cancellation.ts';
 import {automaticAI} from './ai-policy.ts';
 import {stmt,rows,id,now,getCapture} from './core.ts';
 export function isbnFrom(text:string){
@@ -30,7 +31,8 @@ export async function processBibliography(env:Env,captureId:string,fetcher:typeo
   await env.DB.batch([stmt(env,`UPDATE sources SET bibliography_json=? WHERE id=? AND EXISTS(SELECT 1 FROM captures WHERE id=? AND version=? AND source_id=sources.id) AND EXISTS(SELECT 1 FROM bibliography_jobs WHERE capture_id=? AND lease_token=?)`,metadata,c.source_id,captureId,j.version,captureId,token),stmt(env,"UPDATE bibliography_jobs SET state='completed',lease_token=NULL,error_code=NULL WHERE capture_id=? AND lease_token=?",captureId,token)]);
  }catch{await stmt(env,"UPDATE bibliography_jobs SET state=CASE WHEN attempts<3 THEN 'pending' ELSE 'failed' END,error_code='bibliography_unavailable',lease_token=NULL,dispatched_at=NULL,available_at=? WHERE capture_id=? AND lease_token=?",now()+60000,captureId,token).run();}
 }
-export async function dispatchBibliography(env:Env){if(!automaticAI(env))return;
+export async function dispatchBibliography(env:Env){
+ env=cancellationCleanup(env);if(!automaticAI(env))return;
  await stmt(env,"UPDATE bibliography_jobs SET state=CASE WHEN attempts>=3 THEN 'failed' ELSE 'pending' END,error_code='worker_interrupted',dispatched_at=NULL,lease_token=NULL WHERE state='running' AND lease_until<?",now()).run();
  // One dispatched request per minute; cached queries do not hit the public API.
  const j=await stmt(env,"UPDATE bibliography_jobs SET dispatched_at=? WHERE capture_id=(SELECT capture_id FROM bibliography_jobs WHERE state='pending' AND available_at<=? AND (dispatched_at IS NULL OR dispatched_at<?) ORDER BY available_at LIMIT 1) AND NOT EXISTS(SELECT 1 FROM settings WHERE key='bibliography_last_dispatch' AND CAST(value AS INTEGER)>?) RETURNING capture_id",now(),now(),now()-300000,now()-60000).first<{capture_id:string}>();if(!j)return;

@@ -1,3 +1,5 @@
+import {cancellationCleanup} from './ai-cancellation.ts';
+import {commitAIResult} from './ai-cancellation.ts';
 import {retrieveExternal} from './external.ts';
 import {automaticAI,allowedAI} from './ai-policy.ts';
 import {membershipJobStatement,dispatchThemes,processThemeJob} from './themes.ts';
@@ -12,6 +14,7 @@ import {dispatchImports,processImport} from './imports.ts';
 import {dispatchBibliography,processBibliography,scheduleBibliography} from './bibliography.ts';
 
 export async function dispatch(env:Env) {
+ env=cancellationCleanup(env);
  const time=now();
  await env.DB.batch([
   stmt(env,`UPDATE jobs SET state=CASE WHEN attempts>=3 THEN 'failed' ELSE 'pending' END,error_code='worker_interrupted',dispatched_at=NULL,lease_token=NULL WHERE state='running' AND lease_until<?`,time),
@@ -76,7 +79,7 @@ export async function processJob(env:Env,jobId:string,fetcher?:typeof fetch) {
   if(automaticAI(env))statements.push(graphJobStatement(env,capture.id,job.version,guard,[job.id,token]),membershipJobStatement(env,capture.id,job.version,guard,[job.id,token]));
   statements.push(stmt(env,`UPDATE jobs SET state=CASE WHEN version=(SELECT version FROM captures WHERE id=?) THEN 'completed' ELSE 'superseded' END,
    error_code=NULL,model=?,input_tokens=?,output_tokens=?,finished_at=?,lease_token=NULL WHERE id=? AND state='running' AND lease_token=?`,capture.id,output.model,output.usage.input_tokens||0,output.usage.output_tokens||0,now(),job.id,token));
-  await env.DB.batch(statements);
+  await commitAIResult(env,statements);
   if(automaticAI(env)){
   await scheduleReflections(env,capture.id);
   await scheduleBibliography(env,capture.id,job.version);

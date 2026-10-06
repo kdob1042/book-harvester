@@ -1,3 +1,5 @@
+import {cancelLinkedOperation} from './ai-operation-jobs.ts';
+import {commitAIResult} from './ai-cancellation.ts';
 import {questionRoutes} from './question-routes.ts';
 import {callBook} from './book-operations.ts';
 import {automaticAI,authorizeAI} from './ai-policy.ts';
@@ -19,7 +21,7 @@ import {storeCapture} from './capture-storage.ts';
 import {answer,AiError} from './ai.ts';
 import {readGraph,rebuildGraph} from './graph.ts';
 import {scheduleReflections,listReflections,getReflection,readRevisit,splitSession} from './reflections.ts';
-import {receiveImport,readImport,selectImport,deleteImportArchive,importOriginal,reorderImport} from './imports.ts';
+import {receiveImport,readImport,selectImport,retryImport,deleteImportArchive,importOriginal,reorderImport} from './imports.ts';
 
 const json=(data:unknown,status=200,headers:HeadersInit={})=>Response.json(data,{status,headers});
 const has=(input:Record<string,unknown>,key:string)=>Object.hasOwn(input,key);
@@ -284,11 +286,11 @@ export async function route(request:Request,env:Env,ctx:ExecutionContext,trusted
    if(c.version!==version(input.version))fail(409,'資料が更新されています。開き直してください。');
    const question=text(input.question,1000).trim();if(!question)fail(400,'質問を入力してください。');
    const result=await answer(env,c,c.harvest,question);
-   const saved=await stmt(env,`INSERT INTO answers(id,capture_id,version,question,result,created_at) SELECT ?,id,version,?,?,? FROM captures WHERE id=? AND version=?`,id(),question,JSON.stringify(result),now(),captureId,c.version).run();
+   const [saved]=await commitAIResult(env,[stmt(env,`INSERT INTO answers(id,capture_id,version,question,result,created_at) SELECT ?,id,version,?,?,? FROM captures WHERE id=? AND version=?`,id(),question,JSON.stringify(result),now(),captureId,c.version)]);
    if(!saved.meta.changes)fail(409,'回答中に資料が更新されました。開き直してください。');
    return json({...result,capture_id:c.id,capture_version:c.version});
   }
-  if(action==='cancel-extraction'&&method==='POST'){const input=await jsonBody(request.clone()),v=version(input.version);await env.DB.batch([stmt(env,"DELETE FROM explicit_ai_actions WHERE kind='extract' AND target_id=? AND version=?",captureId,v),stmt(env,"UPDATE jobs SET state='blocked',error_code='extraction_required',lease_token=NULL,dispatched_at=NULL WHERE capture_id=? AND version=? AND state IN('pending','running','blocked')",captureId,v)]);return json({ok:true});}
+  if(action==='cancel-extraction'&&method==='POST'){const input=await jsonBody(request.clone()),v=version(input.version);const job=await stmt(env,'SELECT id FROM jobs WHERE capture_id=? AND version=?',captureId,v).first<{id:string}>();const operation=job?await cancelLinkedOperation(env,'capture',job.id,String(v)):null;if(operation)return json({ok:true,ai_operation:operation});await env.DB.batch([stmt(env,"DELETE FROM explicit_ai_actions WHERE kind='extract' AND target_id=? AND version=?",captureId,v),stmt(env,"UPDATE jobs SET state='blocked',error_code='extraction_required',lease_token=NULL,dispatched_at=NULL WHERE capture_id=? AND version=? AND state IN('pending','running','blocked')",captureId,v)]);return json({ok:true});}
   if((action==='extract'||action==='retry')&&method==='POST'){const input=await jsonBody(request.clone());return json(await startExtraction(env,ctx,captureId,version(input.version)),202);}
  }
  const assetMatch=/^\/api\/assets\/([a-f0-9-]{36})$/.exec(path);
@@ -331,7 +333,7 @@ export async function route(request:Request,env:Env,ctx:ExecutionContext,trusted
  if(path==='/api/research'&&method==='POST'){const saved=await startResearch(env,requestKey(request),await jsonBody(request.clone()));ctx.waitUntil(dispatch(env));return json(saved,202);}
  if(path==='/api/research/hosts'&&method==='GET')return json({hosts:allowedHosts(env)});
  const researchMatch=/^\/api\/research\/([a-f0-9-]{36})(?:\/(cancel|retry))?$/.exec(path);
- if(researchMatch){const r=await readResearch(env,researchMatch[1]);if(!r)fail(404,'調査がありません。');if(!researchMatch[2]&&method==='GET')return json(r);if(method==='POST'&&researchMatch[2]==='cancel'){await cancelResearch(env,r.id);return json({ok:true});}if(method==='POST'&&researchMatch[2]==='retry'){await retryResearch(env,r.id);ctx.waitUntil(dispatch(env));return json({ok:true});}}
+ if(researchMatch){const r=await readResearch(env,researchMatch[1]);if(!r)fail(404,'調査がありません。');if(!researchMatch[2]&&method==='GET')return json(r);if(method==='POST'&&researchMatch[2]==='cancel'){const operation=await cancelLinkedOperation(env,'research',r.id);if(operation)return json({ok:true,ai_operation:operation});await cancelResearch(env,r.id);return json({ok:true});}if(method==='POST'&&researchMatch[2]==='retry'){await retryResearch(env,r.id);ctx.waitUntil(dispatch(env));return json({ok:true});}}
  if(path==='/api/export'&&method==='GET')return exportData(env);
  if(path==='/api/imports'&&method==='POST'){const saved=await receiveImport(request,env);ctx.waitUntil(dispatch(env));return json(saved,saved.duplicate?200:201);}
  const importMatch=/^\/api\/imports\/([a-f0-9-]{36})(?:\/(extract|select|retry|original|order)(?:\/(\d+))?)?$/.exec(path);
@@ -342,7 +344,7 @@ export async function route(request:Request,env:Env,ctx:ExecutionContext,trusted
   if(action==='original'&&method==='GET'){const original=await importOriginal(env,job.id,importMatch[3]?Number(importMatch[3]):null);if(!original)fail(404,'原ファイルがありません。');return original;}
   if(action==='select'&&method==='POST'){const input=await jsonBody(request.clone());if(!Array.isArray(input.ordinals)||input.ordinals.some(n=>!Number.isInteger(n)))fail(400,'取り込む範囲を選んでください。');await selectImport(env,job.id,input.ordinals as number[]);ctx.waitUntil(dispatch(env));return json({ok:true},202);}
   if(action==='order'&&method==='POST'){const input=await jsonBody(request.clone());if(job.format!=='photos'||!Array.isArray(input.ordinals))fail(400,'写真番号を指定してください。');await reorderImport(env,job.id,input.ordinals as number[]);return json({ok:true});}
-  if(action==='retry'&&method==='POST'){await env.DB.batch([stmt(env,"UPDATE import_items SET state='available',error_code=NULL WHERE job_id=? AND state='failed' AND capture_id IS NULL",job.id),stmt(env,"UPDATE import_jobs SET state='pending',attempts=0,error_code=NULL,available_at=?,dispatched_at=NULL WHERE id=? AND state IN('failed','partial')",now(),job.id)]);ctx.waitUntil(dispatch(env));return json({ok:true},202);}
+  if(action==='retry'&&method==='POST'){await retryImport(env,job.id);ctx.waitUntil(dispatch(env));return json({ok:true},202);}
   if(!action&&method==='DELETE'){
    await stmt(env,"UPDATE import_jobs SET state='canceled',lease_token=NULL WHERE id=?",job.id).run();
    const current=await readImport(env,job.id);

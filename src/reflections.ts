@@ -1,3 +1,4 @@
+import {cancellationCleanup} from './ai-cancellation.ts';
 import {automaticAI} from './ai-policy.ts';
 import {aiConfigured} from './chatgpt.ts';
 import {stmt,rows,getCapture,now,id,digest,type Harvest} from './core.ts';
@@ -52,7 +53,8 @@ export async function scheduleReflections(env:Env,captureId:string,eventTime=now
  if(s)await scheduleScope(env,'session',session!,s.started_at,s.ended_at,now()+300000);
  for(const time of new Set([c.created_at,eventTime]))for(const scope of ['day','week'] as const){const p=periodBounds(time,scope);await scheduleScope(env,scope,p.key,p.start,p.end,Math.max(now()+300000,p.end+60000));}
 }
-export async function dispatchReflections(env:Env){if(!automaticAI(env))return;
+export async function dispatchReflections(env:Env){
+ env=cancellationCleanup(env);if(!automaticAI(env))return;
  const time=now();
  await env.DB.batch([
   stmt(env,`UPDATE reflection_jobs SET state=CASE WHEN attempts>=3 THEN 'failed' ELSE 'pending' END,dispatched_at=NULL,lease_token=NULL,error_code='worker_interrupted' WHERE state='running' AND lease_until<?`,time),

@@ -1,3 +1,5 @@
+import {cancellationCleanup} from './ai-cancellation.ts';
+import {commitAIResult} from './ai-cancellation.ts';
 import {automaticAI,allowedAI,authorizeAI} from './ai-policy.ts';
 import {themeCandidateCaptures,relevantViews} from './themes.ts';
 import {aiConfigured} from './chatgpt.ts';
@@ -32,6 +34,7 @@ export function graphJobStatement(env:Env,captureId:string,v:number,guard='1',va
  return stmt(env,`INSERT OR IGNORE INTO graph_jobs(id,capture_id,version,available_at,created_at) SELECT ?,?,?,?,? WHERE ${guard}`,id(),captureId,v,now(),now(),...values);
 }
 export async function dispatchGraph(env:Env){
+ env=cancellationCleanup(env);
  const time=now();
  await env.DB.batch([
   stmt(env,`UPDATE graph_jobs SET state=CASE WHEN attempts>=3 THEN 'failed' ELSE 'pending' END,error_code='worker_interrupted',dispatched_at=NULL,lease_token=NULL WHERE state='running' AND lease_until<?`,time),
@@ -126,7 +129,7 @@ export async function processGraphJob(env:Env,jobId:string,fetcher?:typeof fetch
   }
   const finalIndex=statements.length;
   statements.push(stmt(env,`UPDATE graph_jobs SET state='completed',error_code=NULL,lease_token=NULL WHERE id=? AND lease_token=? AND ${exists}`,jobId,token,generation));
-  const saved=await env.DB.batch(statements);
+  const saved=await commitAIResult(env,statements);
   if(saved[finalIndex].meta.changes)await scheduleReflections(env,c.id);
   if(!saved[finalIndex].meta.changes){
    await stmt(env,`UPDATE graph_jobs SET state=CASE WHEN version<>(SELECT version FROM captures WHERE id=capture_id) THEN 'superseded' WHEN attempts<3 THEN 'pending' ELSE 'failed' END,error_code='graph_context_changed',dispatched_at=NULL,lease_token=NULL,available_at=? WHERE id=? AND lease_token=?`,now(),jobId,token).run();

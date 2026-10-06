@@ -1,3 +1,4 @@
+import {commitAIResult} from './ai-cancellation.ts';
 import {questionContent} from './question-context.ts';
 import {stmt,rows,fail,id,now,text,digest} from './core.ts';
 type Row=Record<string,string|number|null>;
@@ -24,7 +25,7 @@ export async function proposeThemeChange(env:Env,a:Record<string,unknown>){
   if(action==='split'){const selected=Array.isArray(a.capture_ids)?a.capture_ids:[];if(!selected.length||selected.length>20||new Set(selected).size!==selected.length||selected.some(c=>!before.theme_memberships.some(m=>m.theme_id===themeId&&m.capture_id===c)))fail(400,'invalid_split_members');for(const table of ['theme_memberships','theme_member_lenses'])after[table]=after[table].map(r=>r.theme_id===themeId&&selected.includes(r.capture_id)?{...r,theme_id:newId}:r);}
  }else if(action==='archive'){from.state='archived';}
  else{if(action==='aliases'){if(!Array.isArray(a.aliases)||a.aliases.length>12||a.aliases.some(x=>typeof x!=='string'||x.length>100))fail(400,'invalid_aliases');from.aliases=JSON.stringify([...new Set(a.aliases)]);}else{for(const k of ['question','scope','exclusions'])if(typeof a[k]==='string')from[k]=text(a[k],k==='question'?200:1000).trim();if(Object.hasOwn(a,'content'))from.content=questionContent(a.content);if(!from.question)fail(400,'theme_question_required');}}
- const changeId=id();await stmt(env,'INSERT INTO theme_changes(id,theme_id,action,reason,theme_ids_json,before_json,after_json,created_at) VALUES(?,?,?,?,?,?,?,?)',changeId,themeId,action,reason,JSON.stringify(ids),JSON.stringify(before),JSON.stringify(after),now()).run();return readThemeChange(env,changeId);
+ const changeId=id();await commitAIResult(env,[stmt(env,'INSERT INTO theme_changes(id,theme_id,action,reason,theme_ids_json,before_json,after_json,created_at) VALUES(?,?,?,?,?,?,?,?)',changeId,themeId,action,reason,JSON.stringify(ids),JSON.stringify(before),JSON.stringify(after),now())]);return readThemeChange(env,changeId);
 }
 // Compare every captured row inside the same D1 batch as the mutation, not just at preview time.
 function snapshotGuard(ids:string[],current:Snapshot){let sql='1';const values:(string|number|null)[]=[];for(const [table,data] of Object.entries(current)){const owner=table==='themes'?'id':'theme_id';sql+=` AND (SELECT count(*) FROM ${table} WHERE ${owner} IN(SELECT value FROM json_each(?)))=?`;values.push(JSON.stringify(ids),data.length);if(data.length){const cols=Object.keys(data[0]);sql+=` AND NOT EXISTS(SELECT 1 FROM json_each(?) j WHERE NOT EXISTS(SELECT 1 FROM ${table} t WHERE ${cols.map(k=>`t.${k} IS json_extract(j.value,'$.${k}')`).join(' AND ')}))`;values.push(JSON.stringify(data));}}return {sql,values};}
