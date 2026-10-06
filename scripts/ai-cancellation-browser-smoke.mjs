@@ -1,11 +1,14 @@
 import {createServer} from 'node:http';
 import {chromium,expect} from '@playwright/test';
 import {fixture,setProviderDouble,json,photo} from '../test/helpers.js';
+import {validateDrilldown} from '../src/drilldown.ts';
 
 // Synthetic local data and an explicitly held provider double; no paid AI calls.
 const f=await fixture({policy:'explicit'});f.env.APP_ORIGIN='http://localhost:8803';
 let releaseAI,calls=0;
-const answer=()=>Response.json({output:[{content:[{type:'output_text',text:JSON.stringify({candidates:[{question:'検証に必要な時間は？',content:'検証の条件',reason:'負担を比較する'}]})}]}]});
+const candidates=[{question:'検証に必要な時間は？',content:'検証の条件',reason:'負担を比較する'},{question:'検証の精度を左右する条件は？',content:'精度の比較',reason:'成立条件を確かめる'}];
+validateDrilldown({candidates});
+const answer=()=>Response.json({output:[{content:[{type:'output_text',text:JSON.stringify({candidates})}]}]});
 setProviderDouble(()=>{calls++;return new Promise(resolve=>{releaseAI=()=>resolve(answer());});});
 const server=createServer(async(req,res)=>{
  try{
@@ -51,7 +54,7 @@ try{
  await start();await page.getByRole('button',{name:'停止',exact:true}).click();
  await expect(page.locator('.ai-dock-panel')).toContainText('深掘り完了');
  await expect(page.locator('.ai-dock-panel')).not.toContainText('停止済み');
- await expect(page.locator('[data-drilldown-question]')).toHaveCount(1);
+ await expect(page.locator('[data-drilldown-question]')).toHaveCount(2);
  await page.unroute('**/api/ai-operations/*/cancel');
  // Reload reads existing operations only, never starts a new AI request.
  const beforeReload=calls;await page.reload();await expect(page.locator('#record')).toBeVisible();
