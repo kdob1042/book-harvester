@@ -1,5 +1,7 @@
 // Shared by the browser and Worker: only requests that start AI work belong here.
 export function describeAIAction(path, method = 'GET') {
+  // Retained/legacy outbox originals may not have request metadata yet.
+  if (typeof path !== 'string' || typeof method !== 'string') return null;
   method = method.toUpperCase();
   path = path.split('?')[0];
   if (method === 'POST') {
